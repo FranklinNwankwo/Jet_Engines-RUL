@@ -4,6 +4,20 @@
 **Status:** Updated to reflect the actual final implementation across all phases (originally drafted before Phase 1; this revision brings every section in line with what was actually built, including work that went beyond the original scope). Where the original plan changed, that's stated explicitly rather than silently edited over.
 **Track:** ML Portfolio — Project 2 (Tabular / Sensor Time-Series)
 
+## Table of contents
+
+1. [Problem Statement](#1-problem-statement)
+2. [Objectives](#2-objectives)
+3. [Dataset](#3-dataset)
+4. [Modeling Approach](#4-modeling-approach)
+5. [Feature Engineering](#5-feature-engineering)
+6. [Evaluation Plan](#6-evaluation-plan)
+7. [Deployment](#7-deployment)
+8. [Repository Structure](#8-repository-structure)
+9. [Deliverables](#9-deliverables)
+10. [Known Gaps](#10-known-gaps)
+11. [Success Criteria](#11-success-criteria)
+
 ---
 
 ## 1. Problem Statement
@@ -18,6 +32,8 @@ In real predictive-maintenance deployments, the majority of monitored units are 
 
 Survival analysis methods instead model the conditional distribution of time-to-failure given "known to have survived to at least time *t*," which is the correct estimand for this problem. This project uses C-MAPSS's structure (complete run-to-failure trajectories for training, truncated/censored trajectories for test) to implement and evaluate that distinction explicitly and correctly, rather than falling into the common mistake — one that experienced ML interviewers recognize immediately — of treating this as vanilla regression.
 
+Because C-MAPSS's training engines all run to failure, the training data itself contains no censoring, so this argument was also **tested** rather than assumed: `notebooks/13_censoring_experiment.ipynb` simulates a fleet in which 25–75% of training engines haven't failed yet (Section 6, item 8). Survival models clearly beat a regression that treats unfinished engines as failed; a regression that simply drops them proved competitive on this dataset.
+
 ---
 
 ## 2. Objectives
@@ -28,7 +44,7 @@ Survival analysis methods instead model the conditional distribution of time-to-
 4. Deploy the best model as an API + dashboard that accepts recent sensor readings and returns a **RUL point estimate with a calibrated confidence interval**, not a bare number.
 5. Produce a portfolio artifact (code, notebooks, README, live demo) that demonstrates survival-analysis fluency as a clear differentiator from typical "RUL regression on C-MAPSS" portfolio projects.
 
-**All five objectives were met.** Beyond them, the project also ended up covering: 5-fold cross-validation of the model ranking, generalization checks on three additional C-MAPSS subsets, hyperparameter tuning validated against both CV and the official test set, a conformal-prediction fix for RSF's interval calibration, and containerization for cloud deployment — none of which were in the original five objectives, added as the project's scope grew. See Sections 8–10 below for the honest state of each.
+**All five objectives were met.** Beyond them, the project also ended up covering: 5-fold cross-validation of the model ranking, generalization checks on three additional C-MAPSS subsets, hyperparameter tuning validated against both CV and the official test set, a conformal-prediction fix for RSF's interval calibration, containerization, and a public live demo ([jetengines-rul.streamlit.app](https://jetengines-rul.streamlit.app/)) — none of which were in the original five objectives, added as the project's scope grew. See Sections 8–10 below for the honest state of each.
 
 ---
 
@@ -104,20 +120,23 @@ RMSE alone is treated as insufficient and explicitly secondary. The evaluation s
 6. **Hyperparameter tuning against that CV protocol** (`notebooks/11_hyperparameter_tuning.ipynb`). Cox/Weibull penalizers confirmed already near-optimal. RSF's `min_samples_leaf` retuned from 30 to 5. The CV support is mixed — higher mean concordance (0.855 vs. 0.841) but only 2 of 5 fold wins and about 2.5× the fold-to-fold variance — so the choice was checked on the official test set, like-for-like (both trained on all 100 engines): leaf=5 was better on every metric (C-index 0.859 → 0.864, NASA score per engine 4.51 → 4.04, MAE 12.0 → 11.3, RMSE 16.3 → 15.5, late rate 62% → 57%, coverage 86% → 87%), mostly by small margins. Deployed on that basis. An earlier version of this brief reported a concordance *drop* (0.901 → 0.864); that compared a row-level validation C-index with an engine-level test C-index and was not a real effect.
 7. **Conformal interval calibration** (`notebooks/12_rsf_interval_calibration.ipynb`, `src/turbofan_rul/conformal.py`). Cross-conformal prediction fixed RSF's under-coverage (0.870 → 0.900 on the real test set, an empirical result rather than a guaranteed one) — but checking by subgroup found the aggregate win was hiding near-total failure (27% coverage) on engines above RSF's structural ceiling, exactly the case Weibull's interval exists to cover. This confirmed, rather than overturned, the original Cox/Weibull/RSF pairing decision.
 
+8. **Censoring experiment — testing the survival framing itself** (`notebooks/13_censoring_experiment.ipynb`, `cross_validation.sample_administrative_censoring` / `build_censored_train_frame`). Administrative, non-informative censoring is simulated on 0/25/50/75% of training engines (5 draws per level); RSF, Cox and Weibull are compared with two RSF-matched random-forest regressions — one dropping unfinished engines, one treating censoring as failure — on the official test set, against a decision rule written before running. Result, at 50% censoring: RSF test C-index 0.852 / RMSE 17.3 / NASA 5.7 per engine; "censoring = failure" regression 0.839 / 23.1 / 9.8 (biased 12 cycles early); "drop censored" regression 0.851 / 17.4 / 4.9 — i.e. tied with RSF on accuracy and better on NASA score. The pre-registered survival advantage over *both* regressions is therefore **not confirmed**: the 125-cycle cap absorbs most of the selection bias from dropping long-lived engines. RSF's measured advantages are stability across censoring draws (C-index std 0.003 vs 0.011 at 75%) and using all the data.
+
 All models are compared in comparison tables across every axis above; the deployment model selection is justified against those tables, not a single number.
 
 ---
 
 ## 7. Deployment
 
-**As built, this section changed in two ways from the original plan: Gradio became Streamlit (a scope change requested mid-project), and the architecture became two genuinely separate containerized services rather than one process.**
+**As built, this section changed in three ways from the original plan: Gradio became Streamlit (a scope change requested mid-project); the architecture became two genuinely separate containerized services rather than one process; and the public demo, constrained by free hosting, runs the dashboard in a single-process embedded mode (see Frontend and Public demo below).**
 
 - **Feature pipeline reuse.** The exact feature-engineering code path used in training is called at inference time (`src/turbofan_rul/inference.py`) — no re-implementation.
 - **Model serialization.** Fitted models and preprocessing state (scalers, regime-clustering KMeans + normalization stats, the conformal interval correction) are serialized (`joblib`/JSON) via `src/turbofan_rul/export_deployment_artifacts.py` — a standalone, deterministic script, not dependent on notebook execution state. Refits on **all** training engines (evaluation's train/val split has already served its purpose by the time this runs).
 - **API.** FastAPI (`api/main.py`) — `POST /predict` (subset-selectable, returns RUL point estimate, Weibull confidence interval, a risk flag, and a supplementary conformally-calibrated RSF interval), plus `GET /subsets` and `GET /subsets/{subset}/metadata` so a frontend can discover available models and required input columns without touching model artifacts directly.
-- **Frontend.** **Streamlit** (`app/streamlit_app.py`), not Gradio as originally planned — switched on request. As of the containerization pass, it is a **pure HTTP client** of the API (no in-process model loading at all) — engine selection or CSV upload, sensor trend chart, predicted RUL/interval/risk flag, calling `/predict` over HTTP with the API's address configurable via `API_BASE_URL`.
+- **Frontend.** **Streamlit** (`app/streamlit_app.py`), not Gradio as originally planned — switched on request. Two modes: in the Docker deployment it is a **pure HTTP client** of the API (no model code imported; API address via `API_BASE_URL`); for the public demo it runs in **embedded mode**, downloading the exported models from a Hugging Face model repo (`MODEL_REPO`) and calling the same `inference.predict` the API uses, so predictions are identical in both modes. Engine selection or CSV upload (with a downloadable example file), predicted RUL / Weibull interval / colour-coded risk level, a chart placing the prediction and intervals against risk zones, and per-sensor trend charts; themed via `.streamlit/config.toml`.
+- **Public demo (added, not in the original plan).** Live at [jetengines-rul.streamlit.app](https://jetengines-rul.streamlit.app/) on Streamlit Community Cloud, which can only host a Streamlit app — hence embedded mode rather than the two-service layout. Free hosts for a separate API were checked and ruled out (Hugging Face Docker Spaces now need a paid plan; Render's free tier is too small for the ~340MB of models; Cloud Run needs a billing card). Because the models are pickled, `app/requirements.txt` — the file Community Cloud installs — pins scikit-learn, scikit-survival, lifelines, numpy, pandas, scipy and joblib to the export environment's exact versions, on Python 3.11.
 - **Containerization (added, not in the original plan).** Separate Dockerfiles for the API (`api/Dockerfile`, bakes the FD001 and FD004 models in at build time) and the dashboard (`app/Dockerfile`, deliberately dependency-light since it holds no model code), plus `docker-compose.yml` for local orchestration. **Written and reasoned through, but not verified end-to-end** — the sandboxed build environment used for this project blocks all container registries (Docker Hub and GHCR both returned 403 on pull), so `docker build` could not actually be run here. What was checked instead: `docker compose config` accepts the compose file, and each image's steps were reproduced outside Docker in a clean Python 3.12 environment (API: install, export FD001 and FD004 from nothing, serve both; dashboard: only `src/` and `app/` with streamlit/pandas/requests, starts cleanly). Expected to work without modification in any normal environment; genuinely unverified until someone runs `docker compose up --build`.
-- **Testing.** 134 tests across 10 files (`tests/`), covering feature engineering, labeling, models, RSF prediction, deep-survival helpers, evaluation, cross-validation, regime clustering, conformal calibration, and inference. Beyond the unit tests, the API was checked end to end over real HTTP (including rejection of NaN/infinite inputs with a clean 422), and the dashboard was run headlessly against the live API (Streamlit `AppTest`) for FD001, FD004, and the API-down case.
+- **Testing.** 150 tests across 11 files (`tests/`), covering feature engineering, labeling, models, RSF prediction, deep-survival helpers, evaluation, cross-validation, regime clustering, conformal calibration, and inference. Beyond the unit tests, the API was checked end to end over real HTTP (including rejection of NaN/infinite inputs with a clean 422), and the dashboard was run headlessly (Streamlit `AppTest` plus browser screenshots at desktop and phone widths) in both modes for FD001, FD004, and the API-down case, giving identical predictions in both. Embedded mode is covered by `tests/test_dashboard_embedded.py`, which GitHub Actions runs against the live demo's Hugging Face models with the demo's pinned dependencies.
 
 ---
 
@@ -140,7 +159,8 @@ turbofan-rul/
 │   ├── 09_fd002_fd003_generalization_check.ipynb  # added: eval-only generalization
 │   ├── 10_fd004_full_pipeline.ipynb            # added: full ladder on FD004
 │   ├── 11_hyperparameter_tuning.ipynb          # added: tuning vs. CV and official test set
-│   └── 12_rsf_interval_calibration.ipynb       # added: conformal calibration fix
+│   ├── 12_rsf_interval_calibration.ipynb       # added: conformal calibration fix
+│   └── 13_censoring_experiment.ipynb           # added: survival vs. regression under simulated censoring
 ├── src/turbofan_rul/
 │   ├── data_loading.py                 # all 4 subsets, not just FD001
 │   ├── features.py                     # rolling stats, trends, health index, regime clustering
@@ -149,29 +169,33 @@ turbofan-rul/
 │   ├── evaluation.py                   # C-index, NASA score, calibration
 │   ├── plotting.py                     # shared dark-theme style() and color constants
 │   ├── deep_survival.py                # added: from-scratch hazard MLP + Keras helpers
-│   ├── cross_validation.py             # added: GroupKFold + truncation-point sampling
+│   ├── cross_validation.py             # added: GroupKFold, truncation points, simulated fleet censoring
 │   ├── conformal.py                    # added: cross-conformal interval calibration
-│   ├── inference.py                    # added: single scoring function, used by the API
+│   ├── inference.py                    # added: single scoring function (API + dashboard embedded mode)
 │   └── export_deployment_artifacts.py  # added: reproducible artifact build script
 ├── api/
 │   ├── main.py                         # FastAPI: /predict, /subsets, /subsets/{s}/metadata
 │   └── Dockerfile                      # added: bakes FD001 + FD004 models; unverified in the sandboxed build env
 ├── app/
 │   ├── streamlit_app.py                # NOT gradio_app.py -- switched to Streamlit on request
+│   ├── requirements.txt                # added: Community Cloud deps for the live demo (pinned)
 │   └── Dockerfile                      # added: unverified in the sandboxed build env
+├── .streamlit/config.toml              # added: dashboard theme
 ├── docker-compose.yml                  # added
 ├── requirements.txt                    # full dev/notebook dependencies
 ├── requirements-api.txt                # added: lean, API-only
 ├── requirements-app.txt                # added: leaner still, zero ML dependencies
 ├── .dockerignore                       # added
-├── tests/                              # 134 tests across 10 files
+├── tests/                              # 150 tests across 11 files
 ├── models/
 │   ├── fd001/                          # RSF + Weibull + metadata, tuned + calibrated
 │   └── fd004/                          # RSF + Weibull + regime-clustering artifacts
 ├── docs/
 │   ├── project_brief.md                # this document
-│   └── architecture_walkthrough.md     # added: chronological build log, every phase
-└── README.md                           # narrative version of this document
+│   ├── technical_report.md             # added: full methods, results, decisions and bug log
+│   ├── architecture_walkthrough.md     # added: chronological build log, every phase
+│   └── images/dashboard.png            # added: dashboard screenshot used in the README
+└── README.md                           # short summary: problem, results at a glance, findings, how to run
 ```
 
 Notebooks are used for exploration, derivation, and reporting. Any logic the API depends on lives in `src/`, imported identically by notebooks and services — never inline-only.
@@ -185,20 +209,22 @@ Notebooks are used for exploration, derivation, and reporting. Any logic the API
 3. Four trained and compared survival models, each with a stated rationale for inclusion — done; deep survival extended to two architectures (LSTM, Conv1D→LSTM).
 4. A from-scratch mathematical derivation of the Weibull survival function, hazard function, and AFT log-likelihood — done, validated to ≤5.4×10⁻⁷ relative error against `lifelines`, including the likelihood's censoring term.
 5. A model-comparison table across C-index, NASA score, RMSE/MAE, and calibration quality, with a stated deployment justification — done, and re-run under 5-fold CV and on FD004 to confirm it wasn't a single-split artifact.
-6. A deployed FastAPI + **Streamlit** (not Gradio) application returning RUL, confidence interval, and risk flag — done, as two separate HTTP services, containerized (build unverified — see Section 7).
-7. A README presenting the full narrative — done, consolidated from an earlier phase-by-phase status log into the current structure.
+6. A deployed FastAPI + **Streamlit** (not Gradio) application returning RUL, confidence interval, and risk flag — done, as two separate HTTP services, containerized (build unverified — see Section 7), with a public live demo at [jetengines-rul.streamlit.app](https://jetengines-rul.streamlit.app/).
+7. A README presenting the project — done: a short summary with results at a glance, key findings and the live link, with the full methods and results moved to `docs/technical_report.md`.
 
-**Beyond the original scope:** 5-fold cross-validation, generalization checks on FD002/FD003/FD004, hyperparameter tuning validated on the official test set, conformal interval calibration, and Docker containerization.
+**Beyond the original scope:** 5-fold cross-validation, generalization checks on FD002/FD003/FD004, hyperparameter tuning validated on the official test set, conformal interval calibration, Docker containerization, and a themed public demo on Streamlit Community Cloud.
 
 ---
 
-## 10. Known Gaps (honestly stated, not hidden)
+## 10. Known Gaps
 
 - **FD004 inherits FD001's tuned hyperparameters and has not been independently tuned.** Its RSF interval correction is computed by the export script (36.00 cycles), but the calibrated interval's coverage on FD004's test set hasn't been checked. Both would cost roughly what FD001's versions did, scaled up for FD004's larger size — a time-budget decision, not a technical blocker.
 - **Training labels keep `event=1` at the 125-cycle cap.** The censored alternative was tested and rejected because it breaks the deployed Weibull interval (Section 4); the labels are therefore a convention, not an exact description of those rows.
 - **Docker images are written but unverified.** The build environment used for this project cannot reach any container registry; `docker build` has never actually been run for either image (the steps inside each were reproduced outside Docker — Section 7).
 - **A cross-validation bug was found and fixed late.** `features.add_ewm_features` used `groupby().apply` plus `reset_index`, which misaligned EWM features on any frame whose row index wasn't 0..n-1 — every CV fold, though not the full training frame or the deployed model. It affected only RSF's CV and tuning numbers (Cox/Weibull use no EWM features); all affected notebooks were re-run after the fix, and the main change was that the leaf=5 tuning result went from looking like a 4-of-5-fold winner to 2 of 5.
 - **A fresh-clone smoke test was performed and caught two real bugs.** A tracked-files-only export of this repo into an isolated directory with a fresh virtual environment surfaced that both `api/main.py`'s startup check and `test_inference.py`'s skip condition were checking for a *tracked* file (`deployment_metadata.json`) as a proxy for whether a model was built, when the actual model file (`rsf.joblib`) is gitignored — invisible in a long-lived development environment where the model always existed once built, but a crash-on-missing-model bug on a genuinely fresh clone. Fixed in both places; re-verified with a full fresh install → model export → live API prediction → test run, all producing results identical to the main development environment. This closes the "does it work outside one long-lived sandbox" question for the Python pipeline specifically — Docker remains the one layer that couldn't be verified the same way (see below).
+- **The public demo is single-process.** It runs the dashboard's embedded mode on Streamlit Community Cloud rather than the two-service layout, because of free-hosting limits (Section 7). Its models are hosted in a Hugging Face model repo and must be re-uploaded after every re-export, with `app/requirements.txt`'s pinned versions kept matching the export environment — otherwise the live app serves stale models or fails to load them.
+- **The survival-vs-regression evidence comes from simulated censoring.** FD001 only, one censoring mechanism, regressors with RSF-matched rather than tuned hyperparameters, and the 125-cycle cap — which, the experiment showed, largely neutralises the bias of dropping unfinished engines. An uncapped target would be the natural next test.
 - **FD002/FD003 are evaluation-only by design**, not partial implementations — RSF only, no tuning, no deployment, deliberately the same weight as an EDA notebook rather than a second full build.
 - **Phase 7's deep-learning numbers are per-seed, not settled.** Training is now deterministic (`keras.utils.set_random_seed` plus `tf.config.experimental.enable_op_determinism()`, so a given seed reproduces exactly), but the official-test-set metrics come from one seed per architecture; only the validation-concordance comparison was repeated across 3 seeds.
 
@@ -206,9 +232,9 @@ Notebooks are used for exploration, derivation, and reporting. Any logic the API
 
 ## 11. Success Criteria
 
-- The censoring structure is correctly built and explicitly documented. **Met.**
+- The censoring structure is correctly built and explicitly documented. **Met** — and the survival framing was tested under simulated censoring (Section 6, item 8), with a mixed result reported as measured.
 - At least three survival models are implemented, benchmarked, and compared on identical held-out data. **Met and exceeded** — four models (including two deep-learning architectures), compared on a single split, 5-fold CV, and a fourth dataset subset.
 - The NASA asymmetric scoring function is implemented from the literature and reported alongside C-index and RMSE/MAE. **Met.**
 - Calibration is checked and reported for the deployed model's confidence intervals. **Met and extended** — conformal calibration added as a dedicated fix, with its own subgroup-level honesty check.
-- A live API + dashboard accepts sensor input and returns RUL with a confidence interval and risk flag. **Met**, as two properly separated HTTP services; containerized but unverified.
+- A live API + dashboard accepts sensor input and returns RUL with a confidence interval and risk flag. **Met** — publicly live at [jetengines-rul.streamlit.app](https://jetengines-rul.streamlit.app/) (embedded mode), and as two properly separated HTTP services in the Docker deployment (containerized but unverified).
 - The README and project brief together allow a technical reviewer to understand *why* every major decision was made. **This document's revision is part of meeting that criterion** — every section above states what changed from the original plan and why, not just the final state.

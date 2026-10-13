@@ -2,7 +2,13 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from turbofan_rul.cross_validation import build_truncated_eval_frame, sample_truncation_points
+from turbofan_rul import features, labeling
+from turbofan_rul.cross_validation import (
+    build_censored_train_frame,
+    build_truncated_eval_frame,
+    sample_administrative_censoring,
+    sample_truncation_points,
+)
 
 
 def _synthetic_engines():
@@ -83,3 +89,106 @@ def test_build_truncated_eval_frame_raises_when_engine_absent():
     df = _synthetic_engines()
     with pytest.raises(ValueError, match="no row at their truncation cycle"):
         build_truncated_eval_frame(df, {1: 60, 99: 10})
+
+
+# ---------------------------------------------------------------------------
+# Simulated fleet censoring
+# ---------------------------------------------------------------------------
+
+def _fleet(n_engines=40, seed=0):
+    rng = np.random.default_rng(seed)
+    frames = []
+    for unit in range(1, n_engines + 1):
+        life = int(rng.integers(130, 300))
+        frames.append(pd.DataFrame({
+            "unit_number": unit,
+            "time_cycles": np.arange(1, life + 1),
+            "sensor_a": rng.normal(size=life).cumsum(),
+        }))
+    return pd.concat(frames, ignore_index=True)
+
+
+@pytest.mark.parametrize("fraction", [0.0, 0.25, 0.5, 0.75, 1.0])
+def test_administrative_censoring_hits_exact_fraction(fraction):
+    df = _fleet()
+    cens = sample_administrative_censoring(df, fraction, random_state=1)
+    assert len(cens) == round(fraction * 40)
+
+
+def test_administrative_censoring_cycles_are_before_failure():
+    df = _fleet()
+    lives = df.groupby("unit_number")["time_cycles"].max()
+    cens = sample_administrative_censoring(df, 0.5, random_state=2)
+    for unit, cycle in cens.items():
+        assert 1 <= cycle < lives[unit]
+
+
+def test_administrative_censoring_reproducible_and_seed_dependent():
+    df = _fleet()
+    a = sample_administrative_censoring(df, 0.5, random_state=3)
+    b = sample_administrative_censoring(df, 0.5, random_state=3)
+    c = sample_administrative_censoring(df, 0.5, random_state=4)
+    assert a == b
+    assert a != c
+
+
+def test_administrative_censoring_rejects_bad_fraction():
+    with pytest.raises(ValueError):
+        sample_administrative_censoring(_fleet(), 1.5)
+
+
+def _featured_fleet(cap=125):
+    df = _fleet(n_engines=10)
+    surv = labeling.build_train_survival_frame(df, cap=cap)
+    return df, features.build_feature_matrix(surv, kept_sensors=["sensor_a"])
+
+
+def test_censored_frame_labels_censored_engines_correctly():
+    cap = 125
+    _, featured = _featured_fleet(cap)
+    cens = {1: 60, 2: 200}
+    out = build_censored_train_frame(featured, cens, cap=cap)
+
+    e1 = out[out.unit_number == 1]
+    assert e1.time_cycles.max() == 60                    # rows after the cut are gone
+    assert (e1.event == 0).all()                         # 60 - cycle < 125 everywhere
+    assert np.allclose(e1.duration, 60 - e1.time_cycles)
+    assert e1.RUL.isna().all()                           # true RUL hidden
+    assert e1.engine_censored.all()
+
+    e2 = out[out.unit_number == 2]
+    long_window = e2[200 - e2.time_cycles >= cap]
+    short_window = e2[200 - e2.time_cycles < cap]
+    assert (long_window.event == 1).all() and (long_window.duration == cap).all()
+    assert (short_window.event == 0).all()
+
+
+def test_censored_frame_leaves_uncensored_engines_unchanged():
+    _, featured = _featured_fleet()
+    out = build_censored_train_frame(featured, {1: 60})
+    before = featured[featured.unit_number == 3]
+    after = out[out.unit_number == 3].drop(columns="engine_censored")
+    # RUL becomes float once censored engines' values are NaN; the values
+    # themselves must be identical.
+    pd.testing.assert_frame_equal(before, after, check_dtype=False)
+
+
+def test_censored_frame_features_match_truncate_then_featurize():
+    """Features are backward-looking, so dropping rows after the cut must
+    give the same feature values as building features on the truncated
+    trajectory -- the assumption build_censored_train_frame relies on."""
+    raw, featured = _featured_fleet()
+    out = build_censored_train_frame(featured, {1: 60})
+    truncated_raw = raw[(raw.unit_number != 1) | (raw.time_cycles <= 60)]
+    refeatured = features.build_feature_matrix(
+        labeling.build_train_survival_frame(truncated_raw), kept_sensors=["sensor_a"])
+    feat_cols = [c for c in refeatured.columns if c.startswith("sensor_a_") or c == "cycle_count"]
+    a = out[out.unit_number == 1][feat_cols].reset_index(drop=True)
+    b = refeatured[refeatured.unit_number == 1][feat_cols].reset_index(drop=True)
+    pd.testing.assert_frame_equal(a, b)
+
+
+def test_censored_frame_with_no_censoring_is_identity():
+    _, featured = _featured_fleet()
+    out = build_censored_train_frame(featured, {})
+    pd.testing.assert_frame_equal(featured, out.drop(columns="engine_censored"))

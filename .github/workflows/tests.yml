@@ -1,0 +1,63 @@
+# Continuous integration.
+#
+# unit-tests        -- every push and pull request: the full test suite.
+#                      Tests that need exported models skip themselves, since
+#                      models/ is gitignored (as on any fresh clone).
+# live-demo-models  -- checks what the public demo actually runs: installs
+#                      app/requirements.txt (the file Streamlit Community
+#                      Cloud installs) on the same Python version, downloads
+#                      the models from the Hugging Face repo, and runs the
+#                      dashboard in embedded mode with real predictions. It
+#                      fails if the pinned library versions stop matching
+#                      the uploaded models. Runs only when the repository
+#                      variable MODEL_REPO is set (see README "Run it").
+
+name: tests
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:      # also allows a manual run from the Actions tab
+
+jobs:
+  unit-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run tests
+        env:
+          PYTHONPATH: src
+        run: pytest tests/ -v
+
+  live-demo-models:
+    if: ${{ vars.MODEL_REPO != '' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"   # must match the Python version selected on Community Cloud
+          cache: pip
+          cache-dependency-path: app/requirements.txt
+
+      - name: Install the live demo's dependencies
+        run: pip install -r app/requirements.txt pytest
+
+      - name: Run the dashboard in embedded mode against the Hugging Face models
+        env:
+          PYTHONPATH: src
+          MODEL_REPO: ${{ vars.MODEL_REPO }}
+        run: pytest tests/test_dashboard_embedded.py -v

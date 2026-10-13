@@ -2,9 +2,36 @@
 
 This is the "how did we get here" document; every phase, what triggered it, what was actually built, why, and what came out of it. Read top to bottom for the full architecture, or jump to any phase. `docs/project_brief.md` is the spec (what the project is); this is the build log (how it happened and why each piece exists).
 
+## Table of contents
+
+1. [The framing (before any code)](#1-the-framing-before-any-code)
+2. [Phase 0: Project brief](#2-phase-0-project-brief)
+3. [Phase 1: Data acquisition + EDA](#3-phase-1-data-acquisition--eda)
+4. [Phase 2: Labeling + feature engineering](#4-phase-2-labeling--feature-engineering)
+5. [Phase 3: Cox Proportional Hazards baseline](#5-phase-3-cox-proportional-hazards-baseline)
+6. [Phase 4: Weibull AFT](#6-phase-4-weibull-aft)
+7. [Phase 5: Random Survival Forest](#7-phase-5-random-survival-forest)
+8. [Phase 6: Evaluation](#8-phase-6-evaluation)
+9. [Phase 7: Deep survival model (stretch) — the phase with the most course-correction](#9-phase-7-deep-survival-model-stretch--the-phase-with-the-most-course-correction)
+10. [Phase 8/9: Deployment (API + dashboard)](#10-phase-89-deployment-api--dashboard)
+11. [Phase 10: README consolidation](#11-phase-10-readme-consolidation)
+12. [Phase 11: 5-fold cross-validation](#12-phase-11-5-fold-cross-validation)
+13. [Phase 12: FD004 generalization (a-through-d)](#13-phase-12-fd004-generalization-a-through-d)
+14. [Phase 13: hyperparameter tuning](#14-phase-13-hyperparameter-tuning)
+15. [Phase 14: RSF interval calibration](#15-phase-14-rsf-interval-calibration)
+16. [Phase 15: proper two-service architecture + containerization](#16-phase-15-proper-two-service-architecture--containerization)
+17. [Phase 16: fresh-clone verification](#17-phase-16-fresh-clone-verification)
+18. [Phase 17: measuring the Phase 8/9 feature-scope bug instead of just documenting it](#18-phase-17-measuring-the-phase-89-feature-scope-bug-instead-of-just-documenting-it)
+19. [Phase 18: correctness review and corrections](#19-phase-18-correctness-review-and-corrections)
+20. [Phase 19: dashboard redesign + public deployment](#20-phase-19-dashboard-redesign--public-deployment)
+21. [Phase 20: testing the survival framing itself](#21-phase-20-testing-the-survival-framing-itself)
+22. [Phase 21: README rewritten for readers, detail moved to a technical report](#22-phase-21-readme-rewritten-for-readers-detail-moved-to-a-technical-report)
+23. [Phase 22: continuous integration](#23-phase-22-continuous-integration)
+24. [Where things stand](#24-where-things-stand)
+
 ---
 
-## 0. The framing (before any code)
+## 1. The framing (before any code)
 
 **What was decided:** C-MAPSS turbofan dataset, framed as **survival analysis**, not regression. The reasoning that shaped everything downstream: most real-world equipment hasn't failed yet when you build a model, that's *right censoring*. A regressor trained on observed failures only, or one that treats a censored unit's current age as its true RUL, is trained on a biased sample. Survival analysis models "time-to-event given known to have survived this long," which is the correct estimand.
 
@@ -12,7 +39,7 @@ This is the "how did we get here" document; every phase, what triggered it, what
 
 ---
 
-## Phase 0: Project brief
+## 2. Phase 0: Project brief
 
 **What was built:** `docs/project_brief.md` — problem statement, objectives, dataset description, the model ladder (Cox → Weibull → RSF, with a stretch deep-learning phase), evaluation plan, deployment plan, repo structure, explicit non-goals (FD002-004 deferred), success criteria.
 
@@ -20,7 +47,7 @@ This is the "how did we get here" document; every phase, what triggered it, what
 
 ---
 
-## Phase 1: Data acquisition + EDA
+## 3. Phase 1: Data acquisition + EDA
 
 **What was built:** `data_loading.py` (downloads from a verified GitHub mirror of the raw NASA files, validates row/unit counts against published dataset statistics after every download so a stale mirror fails loudly) and `notebooks/01_eda.ipynb` (raw sensor trajectory plots, per-sensor coefficient-of-variation screening, correlation heatmap, operating-condition variability check).
 
@@ -32,7 +59,7 @@ This is the "how did we get here" document; every phase, what triggered it, what
 
 ---
 
-## Phase 2: Labeling + feature engineering
+## 4. Phase 2: Labeling + feature engineering
 
 **What was built:** `labeling.py` (piecewise-linear RUL capped at 125 cycles; the standard C-MAPSS convention, since early-life cycles carry no degradation signal, plus the `(duration, event)` construction: every training row gets `event=1`, since every training engine runs to an observed failure, and `duration` = the row's remaining life capped at 125 — so the 8,131 of 20,631 FD001 rows at the cap are labeled as failing in exactly 125 cycles, a convention rather than their exact time-to-failure; see Phase 18 for the censored alternative, tested and rejected) and `features.py` (rolling mean/std/min/max/trend-slope across 5/15/30-cycle windows, EWMA, all strictly grouped per-engine so no window ever crosses an engine boundary, checked directly in tests, not just assumed).
 
@@ -40,7 +67,7 @@ This is the "how did we get here" document; every phase, what triggered it, what
 
 ---
 
-## Phase 3: Cox Proportional Hazards baseline
+## 5. Phase 3: Cox Proportional Hazards baseline
 
 **What was built:** `models.py`'s `train_val_split_by_engine` (splits on engine ID, never on rows, a row-level split would leak, since consecutive cycles from one engine are correlated) and `notebooks/03_cox_baseline.ipynb`, fitting Cox on a **curated 25-feature subset** (one rolling window's mean+slope per sensor, not all 205 engineered columns).
 
@@ -52,7 +79,7 @@ This is the "how did we get here" document; every phase, what triggered it, what
 
 ---
 
-## Phase 4: Weibull AFT
+## 6. Phase 4: Weibull AFT
 
 **What was built:** `notebooks/04_weibull_aft.ipynb` — the Weibull survival/hazard/AFT log-likelihood derived by hand in markdown, then validated by fitting an intercept-only version from scratch (NumPy + `scipy.optimize`) and checking it against `lifelines.WeibullFitter` on the same data.
 
@@ -64,7 +91,7 @@ This is the "how did we get here" document; every phase, what triggered it, what
 
 ---
 
-## Phase 5: Random Survival Forest
+## 7. Phase 5: Random Survival Forest
 
 **What was built:** RSF fit on the **full** feature set (229 columns, vs. Cox's 25) via `models.fit_random_survival_forest`, with row-subsampling (`row_stride=3`) justified by an actual measured comparison (strides 1/2/3/5 → validation concordance 0.9033/0.9013/0.9008/0.8972, with stride 1 costing about 7× stride 3's fit time) rather than picked by convenience.
 
@@ -76,7 +103,7 @@ This is the "how did we get here" document; every phase, what triggered it, what
 
 ---
 
-## Phase 6: Evaluation
+## 8. Phase 6: Evaluation
 
 **What was built:** `evaluation.py` — the **NASA asymmetric scoring function**, implemented from the C-MAPSS literature (not imported), penalizing late predictions (predicted more life than exists which is outrightly dangerous) harder than early ones (predicted less, merely costly), via two different exponential-decay constants. Unit-tested specifically for the asymmetry: if the two constants were ever swapped, the metric would silently reward the wrong behavior.
 
@@ -94,7 +121,7 @@ This is the "how did we get here" document; every phase, what triggered it, what
 
 ---
 
-## Phase 7: Deep survival model (stretch) — the phase with the most course-correction
+## 9. Phase 7: Deep survival model (stretch) — the phase with the most course-correction
 
 This phase went through three distinct versions, which is worth tracing since it's the clearest example of the project's iterate-until-complete pattern.
 
@@ -110,9 +137,9 @@ This phase went through three distinct versions, which is worth tracing since it
 
 ---
 
-## Phase 8/9: Deployment (API + dashboard)
+## 10. Phase 8/9: Deployment (API + dashboard)
 
-**What was built:** `export_deployment_artifacts.py` (a standalone, deterministic script, not notebook state, that refits RSF + Weibull on **all** training engines, since the 80/20 split's job was evaluation, which is already done); `inference.py` (the single scoring function, at this point imported directly by both the API and the dashboard rather than duplicated — the dashboard moved to HTTP-only in Phase 15); `api/main.py` (FastAPI, tested with real predictions and all error paths via `TestClient`); `app/streamlit_app.py` (verified end-to-end through headless-browser automation, not just "it started without crashing").
+**What was built:** `export_deployment_artifacts.py` (a standalone, deterministic script, not notebook state, that refits RSF + Weibull on **all** training engines, since the 80/20 split's job was evaluation, which is already done); `inference.py` (the single scoring function, at this point imported directly by both the API and the dashboard rather than duplicated — the dashboard moved to HTTP-only in Phase 15, then gained an optional embedded mode for the public demo in Phase 19); `api/main.py` (FastAPI, tested with real predictions and all error paths via `TestClient`); `app/streamlit_app.py` (verified end-to-end through headless-browser automation, not just "it started without crashing").
 
 **Real bug caught:** building the export script forced explicit enumeration of every column RSF needs, which surfaced that Phase 5's "full feature set" silently included raw passthrough values for all 21 sensors and 3 operating settings, not just the 12 Phase 1 flagged as informative. **Decision at the time:** keep the model exactly as evaluated (retraining then would have invalidated the reported Phase 6 numbers), document the gap in three places, and adjust the API contract to require the raw telemetry the model actually needs. **Later measured, not left as an assumption — see Phase 17.**
 
@@ -120,13 +147,13 @@ This phase went through three distinct versions, which is worth tracing since it
 
 ---
 
-## Phase 10: README consolidation
+## 11. Phase 10: README consolidation
 
 **What changed:** the README had grown into a phase-by-phase status log through the build. Rewritten as a top-to-bottom narrative; problem framing → censoring argument → feature engineering → model ladder (each model justified by what the previous one's diagnostics showed) → evaluation methodology → results → deployment → a dedicated "bugs caught along the way" section → scope notes. `project_brief.md` stayed untouched as the technical spec; the README became the story.
 
 ---
 
-## Phase 11: 5-fold cross-validation
+## 12. Phase 11: 5-fold cross-validation
 
 **What was built:** `cross_validation.py` — `GroupKFold` by engine (5 folds), with held-out engines scored at a **randomly sampled mid-life truncation point** (30-90% of observed lifetime) rather than their final cycle, which would trivially be RUL=0 for a full run-to-failure trajectory. This mirrors how NASA actually built the official test set.
 
@@ -134,7 +161,7 @@ This phase went through three distinct versions, which is worth tracing since it
 
 ---
 
-## Phase 12: FD004 generalization (a-through-d)
+## 13. Phase 12: FD004 generalization (a-through-d)
 
 **12a — the missing pipeline piece.** `features.py` gained regime clustering (`fit_regime_clusters`, KMeans on the 3 operating settings) and within-cluster normalization, validated on real FD002 data: one sensor's raw variance was **99.99% explained by which regime an engine was in**, not degradation, confirming the step does real work, not assumed to.
 
@@ -148,7 +175,7 @@ This phase went through three distinct versions, which is worth tracing since it
 
 ---
 
-## Phase 13: hyperparameter tuning
+## 14. Phase 13: hyperparameter tuning
 
 **What was built:** Cox/Weibull penalizer search across a full 5-fold grid — the existing default (0.1) turned out already near-optimal, confirmed rather than assumed. For RSF, `max_features="sqrt"` clearly beat `"log2"`; a narrower single-fold search found leaf sizes 3, 5 and 8 tied, and `min_samples_leaf=5` was compared with the original default of 30 across all 5 folds.
 
@@ -160,7 +187,7 @@ This phase went through three distinct versions, which is worth tracing since it
 
 ---
 
-## Phase 14: RSF interval calibration
+## 15. Phase 14: RSF interval calibration
 
 **What was built:** cross-conformal prediction (`conformal.py`) — each of the 100 training engines scored by a model fit on the other 4 folds, pooling calibration data without holding any engine out of the final deployed model. Calibrated correction: 5.00 cycles, added to both interval bounds (re-run in Phase 18 with the fold models using the deployed `row_stride=3`, so the notebook's correction matches the deployed artifact's exactly).
 
@@ -170,17 +197,17 @@ This phase went through three distinct versions, which is worth tracing since it
 
 ---
 
-## Phase 15: proper two-service architecture + containerization
+## 16. Phase 15: proper two-service architecture + containerization
 
 **The HTTP refactor.** `app/streamlit_app.py` had been calling `inference.predict()` in-process as a documented demo simplification. Now the dashboard imports no modeling code at all, and calls the API's `/predict`, `/subsets`, and new `/subsets/{subset}/metadata` endpoints (added so the frontend can discover required columns without touching model artifacts) over HTTP, with the API's address read from an `API_BASE_URL` environment variable rather than hardcoded. Verified for real, a live `uvicorn` server and a live Streamlit process, driven through an actual browser click via Playwright, with the API's own access log confirming the full round-trip (`/health` → `/subsets` → `/subsets/{subset}/metadata` → `/predict`) actually happened.
 
-**A direct, measurable consequence of that refactor:** splitting `requirements.txt` into `requirements-api.txt` and `requirements-app.txt` showed the dashboard's dependency list no longer needed scikit-learn, scikit-survival, or lifelines at all, it literally cannot load a model anymore, by construction.
+**A direct, measurable consequence of that refactor:** splitting `requirements.txt` into `requirements-api.txt` and `requirements-app.txt` showed the dashboard's dependency list no longer needed scikit-learn, scikit-survival, or lifelines at all, it literally cannot load a model anymore, by construction. (Still true of the Docker dashboard image; Phase 19 added a separate, opt-in embedded mode for the public demo.)
 
 **Docker: written, honestly not verified.** Separate Dockerfiles for the API (bakes the FD001 model in at build time, accepting a slow build for an instant start — FD004 added in Phase 18) and the dashboard (lean, zero ML dependencies), plus a `docker-compose.yml`. Installing Docker itself and starting its daemon worked fine in this sandbox — but every `docker build` failed with a 403 on the base-image pull, from both Docker Hub and GHCR. The sandbox's network allowlist covers package registries (PyPI, npm, GitHub) but no container registry at all. Disclosed directly rather than claimed as working: this is the one piece of the project that was written to standard patterns and reasoned through, but never actually executed.
 
 ---
 
-## Phase 16: fresh-clone verification
+## 17. Phase 16: fresh-clone verification
 
 **What was done:** the repo was initialized as a git repository specifically so `.gitignore` could be trusted to define exactly what a real clone would contain, then `git archive` exported precisely that tracked set into a completely separate directory. A fresh Python virtual environment, `pip install -r requirements.txt` from nothing, and the full test suite immediately surfaced 19 errors, not because anything was broken, but because the fresh directory correctly had no pre-built models (as designed — they're gitignored, too large to version).
 
@@ -190,7 +217,7 @@ This phase went through three distinct versions, which is worth tracing since it
 
 ---
 
-## Phase 17: measuring the Phase 8/9 feature-scope bug instead of just documenting it
+## 18. Phase 17: measuring the Phase 8/9 feature-scope bug instead of just documenting it
 
 **What prompted it:** a direct challenge to the Phase 8/9 decision — "keep the model as evaluated, document the gap" was pragmatic, not evidenced. No one had ever measured how much the leak actually mattered, and every phase since (CV, tuning, calibration) had silently inherited the same confounded feature set. A proposal to restrict RSF to Cox/Weibull's exact 25-column curated set was considered and set aside: that would strip not just the 24 columns that were never supposed to be there, but 180 of RSF's 205 legitimately-scoped engineered columns too — a materially different, narrower experiment than fixing the actual bug.
 
@@ -200,7 +227,7 @@ This phase went through three distinct versions, which is worth tracing since it
 
 ---
 
-## Phase 18: correctness review and corrections
+## 19. Phase 18: correctness review and corrections
 
 **What prompted it:** a file-by-file review of every source file, test, notebook, deployment file and document, checking each claim against what the code actually does and re-running everything affected.
 
@@ -208,7 +235,7 @@ This phase went through three distinct versions, which is worth tracing since it
 - **EWM features misaligned on CV folds.** `features.add_ewm_features` used `groupby().apply` + `reset_index(level=0)`, which only lines up on a frame whose index runs 0..n-1. The full training frame (and so the deployed model) was fine, but every CV fold's filtered frame got misaligned or missing EWM values. Fixed with `groupby().transform`; `build_feature_matrix` now rejects frames with duplicate indexes or rows out of cycle order. It affected only RSF's CV and tuning numbers — and it mattered: Phase 13's leaf=5 result went from "wins 4 of 5 folds" to 2 of 5.
 - **Two C-indices compared as one.** Row-level validation C (0.901 for RSF) had been put side by side with engine-level test C (0.864). Every model now reports an engine-level test C-index, used for all cross-model, cross-notebook and cross-subset comparisons; this removed Phase 13's phantom "regression" and corrected Phase 7's and Phase 12's comparisons.
 - **API returned 500 instead of 422 on infinite inputs.** `SensorReading` now rejects NaN/infinity (`allow_inf_nan=False`), and a custom validation-error handler stops the error response from trying to echo the invalid number back. The dashboard also gained readable API-error messages and a clean message if the API goes down mid-session.
-- **Dependency floors.** `requirements-api.txt` gained `joblib` (imported directly by `models.py`); `requirements-app.txt` raised Streamlit to `>=1.50`, since older versions reject the `width="stretch"` charts the dashboard uses.
+- **Dependency floors.** `requirements-api.txt` gained `joblib` (imported directly by `models.py`); `requirements-app.txt` raised Streamlit to `>=1.50`, since older versions reject the `width="stretch"` charts the dashboard uses (raised again to `>=1.51` in Phase 19, for the new Altair charts).
 
 **Method changes:**
 - Cox fit with engine-clustered robust standard errors (14/25 PH violations, not 18/25); Weibull's wear-out evidence switched to the per-engine lifetime fit (ρ = 4.41); a censoring-term check added to the Weibull derivation.
@@ -220,16 +247,58 @@ This phase went through three distinct versions, which is worth tracing since it
 
 **Deployment:** `api/Dockerfile` now exports FD004 as well as FD001; both exports and the API serving both subsets were reproduced outside Docker in a clean Python 3.12 environment, and `docker compose config` accepts the compose file.
 
-**Re-run:** all 12 notebooks re-executed on the corrected code; the test suite grew to 134 tests across 10 files; README and project brief updated to match.
+**Re-run:** all 12 notebooks re-executed on the corrected code; the test suite grew to 134 tests across 10 files (146 after Phase 20); README and project brief updated to match.
 
 ---
 
-## Where things stand
+## 20. Phase 19: dashboard redesign + public deployment
 
-**Done, verified with real execution:** the full survival-analysis framing and censoring argument; the complete model ladder (Cox → Weibull → RSF → two deep-learning architectures), each addition justified by the previous model's diagnostics; domain-appropriate evaluation (NASA score primary, RMSE secondary); 5-fold cross-validation confirming the ranking isn't a single-split artifact; generalization checks across three additional dataset subsets; hyperparameter tuning validated against both CV and the real official test set; a conformal-prediction fix for RSF's interval coverage, validated by subgroup rather than trusted in aggregate; the Phase 8/9 feature-scope leak, measured rather than left as a documented assumption; a properly separated two-service HTTP architecture, fresh-clone verified end to end (install → export → serve → test, from nothing); a full correctness review (Phase 18) with every notebook re-run; 134 tests across 10 files; and a README, project brief and architecture walkthrough that match the actual current state rather than the original plan.
+**What prompted it:** the dashboard worked but looked like a default Streamlit page, and the project had no public URL.
+
+**The redesign.** A theme in `.streamlit/config.toml` (dark navy/amber "engine console" palette, Inter / Space Grotesk / JetBrains Mono fonts) and a rebuilt `app/streamlit_app.py`: headline cards for predicted RUL, the Weibull interval and a colour-coded risk level; one "where this engine sits" chart showing the point estimate, both intervals and the true RUL against shaded risk zones; per-sensor small multiples with a rolling-mean trend; an example-CSV download on the upload tab; and results that persist across reruns. Charts use Altair (ships with Streamlit). Checked in a headless browser on desktop and phone widths; two chart bugs found that way were fixed (interval bars not drawing because layers shared a colour scale, and labels colliding). Testing the new charts on older Streamlit versions showed `st.altair_chart(width=...)` needs 1.51, so the floor moved from 1.50 to 1.51.
+
+**The hosting decision.** The obvious free host for the API, a Hugging Face Docker Space, now requires a paid plan; Render's free tier (512MB) is too small for the ~340MB of models; Google Cloud Run needs a billing card. Streamlit Community Cloud is free but only runs a Streamlit app. So the dashboard gained a second mode rather than the project gaining a paid service: when `API_BASE_URL` is unset and `MODEL_REPO` is set, it downloads the exported `fd001/` and `fd004/` folders from a public Hugging Face model repo and calls `inference.predict` in-process. The model code is imported lazily, so the Docker dashboard image (HTTP mode) still never installs it. Measured first: both bundles load in ~0.6GB and about 1.5s, comfortably inside Community Cloud's limits.
+
+**A real problem caught before it shipped:** the first embedded-mode test failed to load the Weibull model — test models pickled under pandas 3 could not be unpickled under pandas 2. Pickled scikit-learn/scikit-survival/lifelines models are tied to the library versions that saved them, so `app/requirements.txt` (the file Community Cloud reads, which sits next to the entrypoint and so takes precedence over the root `requirements.txt`) pins those libraries to the export environment's exact versions; the app now reports a version mismatch clearly instead of crashing. A second version issue surfaced during deployment: a fresh local venv had silently been created with Python 3.14, which TensorFlow doesn't support yet and which forced a newer numpy; the venv was rebuilt on Python 3.11, the models re-exported in it, and the pins regenerated from its `pip freeze`, with Community Cloud set to 3.11 to match.
+
+**Verified:** identical predictions in both modes (FD001 test engine 1: 121 cycles [52, 237]; FD004: 33 [13, 59]); HTTP mode re-tested in an environment with no ML libraries installed; the live app at [https://jetengines-rul.streamlit.app/](https://jetengines-rul.streamlit.app/) runs end to end. Housekeeping found along the way: research models that notebooks 03/04/05/07 save directly into `models/` weren't covered by `.gitignore` (now ignored), and `.gitignore`/`.dockerignore` had excluded the whole `.streamlit/` folder, which would have kept the theme off GitHub and out of Docker (now only `secrets.toml` is excluded).
+
+---
+
+## 21. Phase 20: testing the survival framing itself
+
+**What prompted it:** a review of the project pointed out that its central claim — survival analysis is necessary because of right censoring — had never been tested. Every C-MAPSS training engine runs to failure, and the only censoring ever tried (capped rows, Phase 18) was rejected, so the training data contained no censoring at all.
+
+**What was built:** two helpers in `cross_validation.py` with 12 new tests. `sample_administrative_censoring` simulates a fleet observed up to a fixed date: each engine's observation window is drawn independently of its lifetime (non-informative censoring), with a fleet-wide scale set so an exact fraction of engines is censored. `build_censored_train_frame` truncates those engines and labels their rows (`event=0` inside the window, the usual capped `event=1` when the window reaches 125 cycles), hiding their true RUL. A test confirms that truncating after featurizing equals featurizing the truncated trajectories. `notebooks/13_censoring_experiment.ipynb` runs RSF, Cox, Weibull and two RSF-matched random-forest regressions ("drop unfinished engines" and "treat censoring as failure") at 0/25/50/75% censoring with 5 draws each, scored on the official test set, against a hypothesis and decision rule written into the notebook before it ran.
+
+**Real result — partly confirmed:** survival models decisively beat the "censoring = failure" regression (50% censoring: RMSE 17.3 vs 23.1, C-index 0.852 vs 0.839; that regression is biased about 12 cycles early, 22 at 75%). But the "drop unfinished engines" regression tied RSF on C-index and RMSE (0.851 / 17.4) and beat it on the NASA score (4.9 vs 5.7 per engine), because RSF drifts slightly late under censoring. The pre-registered rule — RSF beating *both* regressions by more than the noise — was not met. The explanation is the 125-cycle cap: rows far from failure share the same capped target, so discarding long-lived engines loses little. RSF's measured advantages are stability (C-index std across draws 0.003 vs 0.011 at 75%) and using all the data. Weibull, notably, did not blow up under engine-level censoring.
+
+**Decision:** nothing in the deployment changes — RSF + Weibull remain the best-supported pairing, and the Weibull interval is still something regression doesn't provide — but the README and brief now state the survival case as measured ("beats the naive regression; more stable; ties a careful one on accuracy here") rather than as an unqualified premise.
+
+---
+
+## 22. Phase 21: README rewritten for readers, detail moved to a technical report
+
+**What prompted it:** the README had grown to 320 lines of method detail, with the headline results around line 70 and a defensive tone ("checked, not assumed", "stated plainly") repeated throughout. A recruiter or interviewer reads the top of a README and stops.
+
+**What changed:** the README is now about 140 lines: a ten-line summary (problem, approach, headline result, deployment, the censoring finding, live link), a dashboard screenshot, a "Results at a glance" section with both result tables, five key findings, a short how-it-works section, run commands, limitations and links. The previous README's full content moved to `docs/technical_report.md`, with the defensive phrasing cut from 39 instances to 6 and the Docker disclosure condensed. No result or claim was changed.
+
+---
+
+## 23. Phase 22: continuous integration
+
+**What was built:** `.github/workflows/tests.yml` with two jobs. `unit-tests` installs `requirements.txt` on Python 3.11 and runs the whole suite on every push and pull request (model-dependent tests skip, as on a fresh clone). `live-demo-models` installs `app/requirements.txt` — exactly what Streamlit Community Cloud installs — downloads the models from the Hugging Face repo named in the `MODEL_REPO` repository variable, and runs the new `tests/test_dashboard_embedded.py`: the dashboard is started headlessly in embedded mode and makes real FD001 and FD004 predictions.
+
+**Why the second job matters:** the live demo's main failure mode is the pinned library versions drifting away from the environment that exported the uploaded models. Checked both ways before shipping: with version-matched models all 4 embedded-mode tests pass; with models exported under pandas 3, 3 of 4 fail. The suite is now 150 tests across 11 files.
+
+---
+
+## 24. Where things stand
+
+**Done, verified with real execution:** the full survival-analysis framing and censoring argument; the complete model ladder (Cox → Weibull → RSF → two deep-learning architectures), each addition justified by the previous model's diagnostics; domain-appropriate evaluation (NASA score primary, RMSE secondary); 5-fold cross-validation confirming the ranking isn't a single-split artifact; generalization checks across three additional dataset subsets; hyperparameter tuning validated against both CV and the real official test set; a conformal-prediction fix for RSF's interval coverage, validated by subgroup rather than trusted in aggregate; the Phase 8/9 feature-scope leak, measured rather than left as a documented assumption; a properly separated two-service HTTP architecture, fresh-clone verified end to end (install → export → serve → test, from nothing); a full correctness review (Phase 18) with every notebook re-run; the survival framing tested under simulated censoring, with a mixed result reported as measured (Phase 20); a short README with results first and a full technical report (Phase 21); a redesigned dashboard live at [https://jetengines-rul.streamlit.app/](https://jetengines-rul.streamlit.app/) (Phase 19); 150 tests across 11 files run by GitHub Actions (Phase 22); and a README, project brief and architecture walkthrough that match the actual current state rather than the original plan.
 
 **Genuinely outstanding — everything left, and nothing more:**
 
 - Docker images are written and reasoned through but never actually built. Needs running in an environment with normal registry access.
-- No hosted/public cloud deployment yet (blocked behind Docker verification).
+- The public demo runs in one process (embedded mode), not as the two-service deployment — a free-hosting constraint (Phase 19). Its models must be re-uploaded to the Hugging Face repo after every re-export, with `app/requirements.txt`'s pins kept in step.
 - FD004 hasn't been independently tuned — it inherits FD001's hyperparameters — and its conformal correction (36.00 cycles) is computed but its coverage on FD004's test set hasn't been checked. A stated time-budget decision, not a technical blocker.
