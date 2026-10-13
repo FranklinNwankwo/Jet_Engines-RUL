@@ -196,7 +196,9 @@ Phase 6 found RSF's 90% intervals under-cover (~86-87% actual). `notebooks/12_rs
 
 **Model pairing, driven by the evaluation above, not convenience:** RSF supplies the point estimate and risk ranking (best NASA score, best concordance); **Weibull AFT supplies the confidence interval**, since RSF's own intervals under-cover and can't extrapolate past its training ceiling while Weibull's are calibrated and unbounded. Cox PH isn't deployed: RSF beats it on every point-estimate and ranking metric, and Cox produces no natural interval to compete with Weibull's. (Against Weibull alone, Cox is not uniformly worse — on FD001 it has the better test C-index, RMSE and MAE, and on FD004 the better RMSE and NASA score — but neither is the deployed point model.) Applies per-subset: FD001 and FD004 each get their own RSF + Weibull pair.
 
-**Two genuinely separate services, communicating over HTTP** — not a single process wearing two hats. `api/main.py` (FastAPI) owns every model artifact and all scoring logic; `app/streamlit_app.py` holds no model artifacts at all and calls the API's `/predict`, `/subsets`, and `/subsets/{subset}/metadata` endpoints over plain HTTP, using `API_BASE_URL` (an environment variable, not a hardcoded address) to find it — `http://localhost:8000` for local development, `http://api:8000` under Docker Compose's service-name DNS, or a public URL once deployed. An earlier version of this app called `inference.predict()` in-process as a documented single-process demo shortcut; that's gone now, not just described differently, since a real two-container cloud deployment needs the two services to actually be separate. A direct, measurable consequence: the dashboard's own dependency list (`requirements-app.txt`) no longer includes scikit-learn, scikit-survival, or lifelines at all — it literally cannot load a model anymore, by construction, not by convention.
+**Two genuinely separate services, communicating over HTTP** — not a single process wearing two hats. `api/main.py` (FastAPI) owns every model artifact and all scoring logic; `app/streamlit_app.py` holds no model artifacts at all and calls the API's `/predict`, `/subsets`, and `/subsets/{subset}/metadata` endpoints over plain HTTP, using `API_BASE_URL` (an environment variable, not a hardcoded address) to find it — `http://localhost:8000` for local development, `http://api:8000` under Docker Compose's service-name DNS, or a public URL once deployed. An earlier version of this app called `inference.predict()` in-process as a documented single-process demo shortcut; that's gone now, not just described differently, since a real two-container cloud deployment needs the two services to actually be separate. A direct, measurable consequence: the dashboard's own dependency list (`requirements-app.txt`) no longer includes scikit-learn, scikit-survival, or lifelines at all — in the Docker deployment it literally cannot load a model, by construction, not by convention.
+
+**Live demo: one exception, stated plainly.** The public demo runs on Streamlit Community Cloud, which can only host a Streamlit app, not a separate API service (and free hosts with enough memory for the ~340MB of models were no longer available). So the dashboard has a second, *embedded* mode: when `API_BASE_URL` is not set and `MODEL_REPO` is, it downloads the exported `fd001/` and `fd004/` model folders from a Hugging Face model repo and calls `turbofan_rul.inference.predict` in-process — the exact function the API calls, so predictions are identical (verified: same 121 [52, 237] for FD001 test engine 1 and 33 [13, 59] for FD004 in both modes). The Docker Compose deployment is unchanged and still runs two separate services. Because the models are pickled scikit-learn/scikit-survival/lifelines objects, `app/requirements.txt` (the Community Cloud dependency file) pins those libraries to the exact versions that exported the models; a mismatch — e.g. models pickled under pandas 3 loaded under pandas 2 — fails to load, and the app says so instead of crashing.
 
 ```
 turbofan-rul/
@@ -217,8 +219,10 @@ turbofan-rul/
 │   ├── main.py                        # FastAPI — POST /predict, GET /subsets, GET /subsets/{s}/metadata
 │   └── Dockerfile                     # bakes FD001 + FD004 model artifacts in at build time
 ├── app/
-│   ├── streamlit_app.py               # pure HTTP client of the API -- no model artifacts
-│   └── Dockerfile                     # lean image, zero ML dependencies
+│   ├── streamlit_app.py               # HTTP client of the API; embedded mode for the public demo
+│   ├── requirements.txt               # Community Cloud deps (embedded mode, versions pinned)
+│   └── Dockerfile                     # lean image, zero ML dependencies (HTTP mode)
+├── .streamlit/config.toml             # dashboard theme
 ├── docker-compose.yml                 # local two-service orchestration
 ├── requirements-api.txt               # lean, API-only deps (no jupyter/matplotlib/tensorflow)
 ├── requirements-app.txt               # leaner still -- streamlit + pandas + requests, nothing ML
@@ -234,7 +238,8 @@ pip install -r requirements.txt
 python -m turbofan_rul.export_deployment_artifacts --subset FD001   # refits on ALL training engines
 python -m turbofan_rul.export_deployment_artifacts --subset FD004   # optional -- FD004 support
 uvicorn api.main:app --reload                          # API on :8000
-API_BASE_URL=http://localhost:8000 streamlit run app/streamlit_app.py   # dashboard on :8501
+API_BASE_URL=http://localhost:8000 streamlit run app/streamlit_app.py   # dashboard on :8501 (HTTP mode)
+MODELS_DIR=models streamlit run app/streamlit_app.py                    # or: no API, models loaded in-app
 PYTHONPATH=src pytest tests/ -v                         # 134 tests
 
 # Containerized, both services:
@@ -278,4 +283,4 @@ Rigor claims are only as good as what they catch. Seven real ones, kept rather t
 - **FD001 gets the full, tuned, interval-calibrated treatment; FD004 gets the full ladder but inherits FD001's tuned hyperparameters**, and while the export script computes its own RSF interval correction (36.00 cycles), the calibrated interval's coverage on FD004's test set hasn't been checked. FD002/FD003 are evaluation-only (RSF, no deployment) — deliberately lighter checks isolating one complexity axis each, not full builds.
 - **Phase 7 (deep survival) is explicitly a stretch.** Justified only if it measurably improved on RSF; it didn't, and that's reported as the result rather than omitted or reframed as a win.
 - **Training labels use `event=1` for every row**, including rows at the 125-cycle cap; the censored alternative was tested and rejected because it breaks the deployed Weibull interval (see [Feature engineering](#feature-engineering)).
-- **Docker files exist but are unverified in this build environment** — see the Deployment section's honest disclosure. No hosted/public cloud deployment yet; that's the last remaining step once Docker is verified to actually build (should be straightforward anywhere with normal container-registry access).
+- **Docker files exist but are unverified in this build environment** — see the Deployment section's honest disclosure. The public demo uses the dashboard's embedded mode on Streamlit Community Cloud rather than the two-container deployment (see "Live demo" above).

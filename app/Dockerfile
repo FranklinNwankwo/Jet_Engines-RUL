@@ -24,6 +24,9 @@ RUN pip install --no-cache-dir -r requirements-app.txt
 
 COPY src/ ./src/
 COPY app/ ./app/
+# The dashboard theme. Streamlit reads .streamlit/config.toml from the
+# working directory (/app), so it must sit at /app/.streamlit/.
+COPY .streamlit/config.toml ./.streamlit/config.toml
 
 ENV PYTHONUNBUFFERED=1
 ENV API_BASE_URL=http://localhost:8000

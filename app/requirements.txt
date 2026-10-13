@@ -1,0 +1,28 @@
+# Dependencies for the PUBLIC DEMO on Streamlit Community Cloud, which runs
+# app/streamlit_app.py in embedded mode (models loaded in-app, downloaded
+# from the Hugging Face model repo named in the MODEL_REPO secret).
+# Community Cloud reads this file before the root requirements.txt because
+# it sits next to the entrypoint.
+#
+# The Docker dashboard image does NOT use this file -- it installs the lean
+# requirements-app.txt and runs in HTTP mode against the API container.
+#
+# PINNED ON PURPOSE: the models are pickled scikit-learn / scikit-survival /
+# lifelines objects, and unpickling them under different library versions
+# can change predictions or fail outright. These pins must match the
+# environment that ran export_deployment_artifacts.py. Check yours with:
+#   pip freeze | Select-String "^(numpy|pandas|scipy|scikit-learn|scikit-survival|lifelines|joblib)=="
+# and update the lines below if any differ. Re-export + re-upload the
+# models whenever you change them.
+numpy==2.4.6
+pandas==2.3.3
+scipy==1.17.1
+scikit-learn==1.9.1
+scikit-survival==0.28.0
+lifelines==0.30.3
+joblib==1.6.0
+
+# Not used by the pickled models, so not pinned.
+streamlit>=1.51
+requests>=2.31
+huggingface_hub>=0.34

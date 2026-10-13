@@ -8,9 +8,11 @@
 # + requests). No scikit-learn, no scikit-survival, no lifelines. Compare
 # to requirements-api.txt.
 #
-# streamlit>=1.50: the app passes width="stretch" to st.line_chart and
-# st.dataframe. Versions 1.49 and older reject that value for
-# st.line_chart with "'stretch' is not of type 'number'".
-streamlit>=1.50
+# streamlit>=1.51: the app passes width="stretch" to st.altair_chart,
+# st.dataframe and st.button; 1.50 and older reject it for st.altair_chart
+# ("unexpected keyword argument 'width'"). The theme in
+# .streamlit/config.toml also needs 1.50+ (Google-font URLs).
+# Altair, used for the charts, ships with Streamlit.
+streamlit>=1.51
 pandas>=2.0
 requests>=2.31

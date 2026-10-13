@@ -1,0 +1,42 @@
+# Dashboard theme. Streamlit reads this file from the folder `streamlit run`
+# is launched from -- the project root locally, /app in the Docker image.
+# Requires streamlit>=1.50 (Google-font URLs and chart palettes in [theme]);
+# the app itself needs 1.51+.
+
+[theme]
+base = "dark"
+
+# "Engine console" palette: deep navy panels, afterburner-amber accent.
+primaryColor = "#F5A524"
+backgroundColor = "#0B1220"
+secondaryBackgroundColor = "#121C2E"
+textColor = "#E6EDF7"
+borderColor = "#22314A"
+linkColor = "#F5A524"
+
+greenColor = "#22C55E"
+orangeColor = "#F5A524"
+redColor = "#EF4444"
+blueColor = "#38BDF8"
+
+font = "Inter:https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap, sans-serif"
+headingFont = "Space Grotesk:https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&display=swap, sans-serif"
+codeFont = "JetBrains Mono:https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&display=swap, monospace"
+headingFontWeights = [700, 600, 600, 600, 600, 600]
+
+baseRadius = "0.6rem"
+buttonRadius = "0.6rem"
+showWidgetBorder = true
+
+chartCategoricalColors = ["#38BDF8", "#F5A524", "#A78BFA", "#34D399", "#F472B6", "#94A3B8"]
+
+[theme.sidebar]
+backgroundColor = "#0E1626"
+secondaryBackgroundColor = "#16223A"
+
+[client]
+toolbarMode = "minimal"
+
+[server]
+# Uploaded sensor CSVs are small; keep the limit modest.
+maxUploadSize = 10
