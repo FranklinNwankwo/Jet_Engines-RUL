@@ -1,0 +1,214 @@
+# Project Brief: Turbofan Engine Remaining Useful Life (RUL) Prediction via Survival Analysis
+
+**Author:** Franklin Obi
+**Status:** Updated to reflect the actual final implementation across all phases (originally drafted before Phase 1; this revision brings every section in line with what was actually built, including work that went beyond the original scope). Where the original plan changed, that's stated explicitly rather than silently edited over.
+**Track:** ML Portfolio — Project 2 (Tabular / Sensor Time-Series)
+
+---
+
+## 1. Problem Statement
+
+Predict the Remaining Useful Life (RUL) of aircraft turbofan engines from multivariate sensor telemetry, using NASA's C-MAPSS (Commercial Modular Aero-Propulsion System Simulation) dataset. Each engine unit runs from a healthy state to failure under one of several operating regimes and fault modes, with 21 sensor channels and 3 operating-condition settings recorded per operational cycle.
+
+This is framed and solved as a **survival analysis / time-to-event problem**, not as plain regression or classification. The distinction is not cosmetic — it determines whether the model is statistically valid at all under realistic deployment conditions.
+
+### Why this is a survival problem, not a regression problem
+
+In real predictive-maintenance deployments, the majority of monitored units are still operating at the time a model is built or queried — their true failure time is unknown and lies somewhere in the future. This is **right censoring**. A model trained naively on (features → observed RUL) using only completed failure trajectories, or one that treats a censored unit's last-known age as its true RUL, is trained on a biased sample: it implicitly excludes "units that would have survived longer than we watched," which systematically biases predictions toward shorter lifetimes.
+
+Survival analysis methods instead model the conditional distribution of time-to-failure given "known to have survived to at least time *t*," which is the correct estimand for this problem. This project uses C-MAPSS's structure (complete run-to-failure trajectories for training, truncated/censored trajectories for test) to implement and evaluate that distinction explicitly and correctly, rather than falling into the common mistake — one that experienced ML interviewers recognize immediately — of treating this as vanilla regression.
+
+---
+
+## 2. Objectives
+
+1. Build a feature engineering pipeline that extracts degradation signal from raw, noisy multivariate sensor time-series.
+2. Implement and compare a ladder of survival modeling approaches of increasing flexibility, with an explicit, defensible rationale for each.
+3. Evaluate models using domain-appropriate metrics — not RMSE alone — including a concordance index and the asymmetric NASA scoring function from the C-MAPSS literature.
+4. Deploy the best model as an API + dashboard that accepts recent sensor readings and returns a **RUL point estimate with a calibrated confidence interval**, not a bare number.
+5. Produce a portfolio artifact (code, notebooks, README, live demo) that demonstrates survival-analysis fluency as a clear differentiator from typical "RUL regression on C-MAPSS" portfolio projects.
+
+**All five objectives were met.** Beyond them, the project also ended up covering: 5-fold cross-validation of the model ranking, generalization checks on three additional C-MAPSS subsets, hyperparameter tuning validated against both CV and the official test set, a conformal-prediction fix for RSF's interval calibration, and containerization for cloud deployment — none of which were in the original five objectives, added as the project's scope grew. See Sections 8–10 below for the honest state of each.
+
+---
+
+## 3. Dataset
+
+**Source:** NASA C-MAPSS Turbofan Engine Degradation Simulation Dataset.
+
+**Primary subset:** FD001 (single operating condition, single fault mode — HPC degradation). Selected as the starting subset to keep the modeling problem well-posed while the survival pipeline is built and validated. **This remains the only subset with the full treatment** — tuned hyperparameters, conformal-calibrated intervals, and full deployment (API + dashboard).
+
+**FD002/FD003/FD004 status (originally scoped as future work — since built, with real limits):**
+- **FD002** (6 operating regimes, 1 fault mode) and **FD003** (1 regime, 2 fault modes) were run as **evaluation-only checks** — Random Survival Forest only, no hyperparameter search, no deployment — each isolating one complexity axis in turn (`notebooks/09_fd002_fd003_generalization_check.ipynb`). FD003 generalized close to the FD001 baseline; FD002 was a real step down in performance even with the regime-normalization fix working correctly.
+- **FD004** (6 regimes, 2 fault modes — both axes combined) got the **full model ladder** (Cox PH, Weibull AFT, RSF) and full official-test-set evaluation (`notebooks/10_fd004_full_pipeline.ipynb`), confirming RSF's lead held under genuine distribution shift. It is also **deployed** (its own API/dashboard subset option) — but it inherits FD001's tuned hyperparameters rather than being independently searched. Its RSF interval correction is computed by the export script like FD001's (q = 36.00 cycles), but the calibrated interval's coverage on FD004's official test set hasn't been checked in a notebook. Both are stated scope gaps, not oversights: each would cost roughly the same 5-fold-refit time FD001's versions took, scaled up for FD004 being ~3x the row count.
+
+**Structure per subset:**
+- `train_FD00X.txt`: full run-to-failure trajectories (unit, cycle, 3 operating settings, 21 sensor readings) — used as the **event** population (event = 1, failure observed).
+- `test_FD00X.txt`: truncated trajectories, each ending at some cycle prior to failure — used as the **censored** population (event = 0, survival time only known to exceed the last observed cycle).
+- `RUL_FD00X.txt`: ground-truth remaining cycles for each test engine at the point of truncation — used only for final evaluation, never as a training feature.
+
+**Censoring structure, built explicitly:**
+A `(duration, event)` pair is constructed for every row the models are fit or scored on. Training: one pair per cycle, `duration` = that cycle's remaining life capped at 125 (see the labeling convention in Section 4), `event` = 1, since every training engine runs to an observed failure. Test: one pair per engine at its last observed cycle, `event` = 0 (right-censored — failure not observed within the data). This is the standard input format for all survival libraries used in this project (`lifelines`, `scikit-survival`) and is treated as a first-class data artifact, not an implementation detail — see `src/turbofan_rul/labeling.py`.
+
+---
+
+## 4. Modeling Approach
+
+Models are benchmarked as a ladder of increasing flexibility, each included with an explicit rationale rather than chosen by default:
+
+| Model | Library | Rationale for inclusion | Key assumption/limitation | Outcome |
+|---|---|---|---|---|
+| Cox Proportional Hazards | `lifelines` | Reference standard in survival analysis; interpretable hazard ratios per feature; establishes a baseline concordance and a diagnostic surface (Schoenfeld residuals) for testing whether hazards are actually proportional over time | Assumes proportional hazards and (typically) linear covariate effects | **Confirmed violated**: 14/25 covariates fail the proportional-hazards test at p<0.05 (fit with engine-clustered robust standard errors; the count is if anything overstated, since the test treats correlated rows as independent) — the stated justification for trying Weibull and RSF next |
+| Weibull AFT (Accelerated Failure Time) | `lifelines` | Mechanical wear-out is physically well-modeled by a Weibull hazard function; fully parametric, so RUL quantiles/confidence intervals come directly from the fitted distribution | Assumes a specific parametric family | A Weibull fit to the 100 engines' lifetimes gives shape ρ = 4.41 (95% CI [3.80, 5.01]), clearly > 1 — increasing hazard (wear-out), as predicted. (The covariate model's own shape, 2.67, isn't used as evidence: it depends on the row-level labels and its CI is far too narrow.) Not the concordance leader, but its intervals are unbounded and covered 90% of FD001 test engines (80% on the harder FD004) — kept as the deployed confidence-interval source for that reason |
+| Random Survival Forest | `scikit-survival` | Drops both the proportional-hazards and parametric-distribution assumptions; captures nonlinear multi-sensor interactions | Its own confidence intervals under-cover; predictions structurally capped at the training time ceiling (~125 cycles) | **Deployment leader** on concordance and NASA score, confirmed across a single split, 5-fold CV, and the FD004 distribution-shift check. Interval under-coverage fixed via conformal calibration for FD001 (see Section 6) but the fix itself doesn't cover engines past the training ceiling — Weibull remains the deployed interval source for that reason |
+| Deep survival models (stretch) — discrete-time hazard head on raw sensor windows, LSTM and Conv1D→LSTM encoders compared | `tensorflow-cpu` (not PyTorch — see note below) | Tests whether temporal structure can be learned directly from raw sensor windows, with zero hand-engineered features, as a check on whether Phase 2's feature engineering was actually earning its keep | Didn't beat feature-engineered RSF with ~80 training engines; intervals under-cover (73–74% vs. 90% nominal) | Neither architecture beat RSF on the official test set (C-index 0.838 LSTM / 0.843 Conv1D→LSTM vs. RSF's 0.864; NASA score 846 / 967 vs. 463). Across a 3-seed comparison, the plain LSTM had the higher validation concordance on all 3 seeds (0.880 vs. 0.871) — the CNN front-end didn't help at this dataset size. Not deployed, exactly as scoped: "justified only if it measurably improves on RSF." |
+
+**Framework note:** the original plan specified PyTorch. PyPI's default `torch` package bundles several GB of CUDA dependencies that exceeded the sandboxed build environment's disk, and the official CPU-only wheel index was outside that environment's network allowlist — an environment constraint, not a framework preference. `tensorflow-cpu` provided a genuine CPU-only build and was used instead; a normal environment would use PyTorch as originally planned.
+
+**Labeling convention:** Piecewise-linear RUL labeling — RUL is capped at a maximum value (125 cycles) for early-life cycles, since engines do not show meaningful degradation signal from cycle 1 and an uncapped linear RUL label would force models to fit a nonexistent early-life trend. Standard C-MAPSS convention, applied deliberately.
+
+**Censoring the capped rows — tested and rejected.** With the cap, every training row keeps `event=1`, including the 8,131 of 20,631 FD001 rows sitting at the cap, which are therefore labeled as failing in exactly 125 cycles when their true remaining life is longer. The statistically cleaner alternative — marking those rows censored at 125 (`labeling.build_train_survival_frame(..., censor_above_cap=True)`) — was tested: Cox improved slightly and RSF was unchanged, but Weibull AFT broke (FD001 NASA score from ~1.3×10³ to ~2×10¹⁰, 90% interval width from ~100 to 184 cycles). Since Weibull supplies the deployed interval, the default stays all-`event=1`.
+
+**Deployment model selection:** Random Survival Forest for point estimate and risk ranking, Weibull AFT for the confidence interval — as originally anticipated in this section, and confirmed by the full evaluation in Phase 6 rather than assumed.
+
+---
+
+## 5. Feature Engineering
+
+Raw sensor readings are noisy and autocorrelated; the degradation signal lives in the *trend*, not the instantaneous value. Features are engineered in layers:
+
+1. **Sensor selection.** Drop near-constant sensors (near-zero variance) identified during EDA; document which sensors are kept and why. For FD001/FD003 (single regime), done via coefficient-of-variation screening on raw values. Caveat: CV divides by the mean, so FD001's `sensor_8` and `sensor_13` (both near 2388) are dropped partly because of their large means; much of the C-MAPSS literature keeps them, so this is a recorded judgment call, not proof they carry no signal. **For FD002/FD004 (multi-regime), this must happen *after* regime normalization (layer 6 below)** — raw variance on a multi-regime subset is dominated by which regime an engine is in, not by how informative the sensor is (confirmed: one sensor's raw variance on FD002 was 99.99% explained by regime, not degradation).
+2. **Rolling statistics.** Rolling mean, standard deviation, min, and max per sensor over multiple window sizes (5, 15, 30 cycles).
+3. **Trend features.** Rolling linear-regression slope per sensor over a window — a direct proxy for instantaneous rate of degradation.
+4. **Exponentially weighted moving averages.** Spans 10 and 30, as a second smoothing/trend-extraction representation alongside the rolling windows (several rank among RSF's most important features). Computed with a per-engine `groupby().transform`, which stays aligned on any row index — an earlier `groupby().apply` version misaligned them on cross-validation folds (see Section 10).
+5. **Cycle-based features.** Current cycle count (`cycle_count`) — deliberately *not* normalized by total lifetime, since that would require knowing an engine's eventual failure cycle (label leakage).
+6. **Regime clustering + normalization (multi-regime subsets only — added when FD002/FD004 work began, not in the original plan).** KMeans on the 3 operating settings (`n_clusters=6`, confirmed by within-cluster std collapsing to ~0 on real data) identifies which of the discrete operating regimes an engine is in; sensor values are then z-scored *within* their regime, fit on training data only, before any rolling/EWMA feature is computed on them. This is what makes FD002/FD004 usable at all — see `src/turbofan_rul/features.py`.
+7. **Composite health index (implemented, optional flag).** PCA reconstruction-error trained on early-life ("healthy") cycles, scored across the full trajectory as a single scalar "distance from healthy" signal (`features.add_health_index`) — available via `build_feature_matrix(..., include_health_index=True)`, off by default.
+
+Every engineered feature is documented with a stated hypothesis for *why* it should correlate with failure risk. All feature-engineering logic lives in `src/turbofan_rul/features.py`, used identically at training time and at inference time — never duplicated between notebook and service code.
+
+---
+
+## 6. Evaluation Plan
+
+RMSE alone is treated as insufficient and explicitly secondary. The evaluation suite is layered:
+
+1. **Concordance index (C-index).** The primary discrimination metric — ranks units by relative risk, independent of predicted magnitude. Two variants are used and never mixed: a *row-level validation* C-index on held-out training engines (within the model notebooks) and an *engine-level test* C-index on the official test engines, which is the one used for every cross-model and cross-subset comparison.
+2. **NASA asymmetric scoring function.** Implemented directly from the C-MAPSS literature (`src/turbofan_rul/evaluation.py`), not imported — penalizes late predictions (over-estimating remaining life) exponentially more than early ones, reflecting that a missed failure is worse than an early replacement. Unit-tested specifically for this asymmetry.
+3. **RMSE / MAE.** Reported as secondary, diagnostic metrics only.
+4. **Calibration.** Two checks: empirical coverage of each model's 90% interval on the test engines, and calibration-by-risk-bin — test engines grouped into quintiles of predicted RUL, comparing mean predicted vs. mean observed RUL per bin to see whether a model is biased specifically for the highest-risk engines. (The original plan's comparison of predicted survival curves against Kaplan-Meier curves was not carried out; interval coverage and per-bin bias were used instead.)
+
+**Extended beyond the original plan, once Phase 6 raised the question of whether a single split could be trusted:**
+
+5. **5-fold cross-validation** (`notebooks/08_cross_validation.ipynb`, `src/turbofan_rul/cross_validation.py`). Held-out engines scored at a randomly sampled mid-life truncation point (mirroring how NASA constructs the actual test set), since a training engine's final row trivially has RUL=0. Confirmed the RSF-leads ranking wasn't a single-split artifact: RSF's mean C-index was 0.850 vs. 0.798 (Cox) and 0.803 (Weibull), strictly best in 4 of 5 folds (Weibull won the fifth), and its mean NASA score was best, winning 3 of 5 folds. RSF's fold-to-fold standard deviation in concordance is also roughly a third of Cox's/Weibull's — the most stable model, not just the best on average.
+6. **Hyperparameter tuning against that CV protocol** (`notebooks/11_hyperparameter_tuning.ipynb`). Cox/Weibull penalizers confirmed already near-optimal. RSF's `min_samples_leaf` retuned from 30 to 5. The CV support is mixed — higher mean concordance (0.855 vs. 0.841) but only 2 of 5 fold wins and about 2.5× the fold-to-fold variance — so the choice was checked on the official test set, like-for-like (both trained on all 100 engines): leaf=5 was better on every metric (C-index 0.859 → 0.864, NASA score per engine 4.51 → 4.04, MAE 12.0 → 11.3, RMSE 16.3 → 15.5, late rate 62% → 57%, coverage 86% → 87%), mostly by small margins. Deployed on that basis. An earlier version of this brief reported a concordance *drop* (0.901 → 0.864); that compared a row-level validation C-index with an engine-level test C-index and was not a real effect.
+7. **Conformal interval calibration** (`notebooks/12_rsf_interval_calibration.ipynb`, `src/turbofan_rul/conformal.py`). Cross-conformal prediction fixed RSF's under-coverage (0.870 → 0.900 on the real test set, an empirical result rather than a guaranteed one) — but checking by subgroup found the aggregate win was hiding near-total failure (27% coverage) on engines above RSF's structural ceiling, exactly the case Weibull's interval exists to cover. This confirmed, rather than overturned, the original Cox/Weibull/RSF pairing decision.
+
+All models are compared in comparison tables across every axis above; the deployment model selection is justified against those tables, not a single number.
+
+---
+
+## 7. Deployment
+
+**As built, this section changed in two ways from the original plan: Gradio became Streamlit (a scope change requested mid-project), and the architecture became two genuinely separate containerized services rather than one process.**
+
+- **Feature pipeline reuse.** The exact feature-engineering code path used in training is called at inference time (`src/turbofan_rul/inference.py`) — no re-implementation.
+- **Model serialization.** Fitted models and preprocessing state (scalers, regime-clustering KMeans + normalization stats, the conformal interval correction) are serialized (`joblib`/JSON) via `src/turbofan_rul/export_deployment_artifacts.py` — a standalone, deterministic script, not dependent on notebook execution state. Refits on **all** training engines (evaluation's train/val split has already served its purpose by the time this runs).
+- **API.** FastAPI (`api/main.py`) — `POST /predict` (subset-selectable, returns RUL point estimate, Weibull confidence interval, a risk flag, and a supplementary conformally-calibrated RSF interval), plus `GET /subsets` and `GET /subsets/{subset}/metadata` so a frontend can discover available models and required input columns without touching model artifacts directly.
+- **Frontend.** **Streamlit** (`app/streamlit_app.py`), not Gradio as originally planned — switched on request. As of the containerization pass, it is a **pure HTTP client** of the API (no in-process model loading at all) — engine selection or CSV upload, sensor trend chart, predicted RUL/interval/risk flag, calling `/predict` over HTTP with the API's address configurable via `API_BASE_URL`.
+- **Containerization (added, not in the original plan).** Separate Dockerfiles for the API (`api/Dockerfile`, bakes the FD001 and FD004 models in at build time) and the dashboard (`app/Dockerfile`, deliberately dependency-light since it holds no model code), plus `docker-compose.yml` for local orchestration. **Written and reasoned through, but not verified end-to-end** — the sandboxed build environment used for this project blocks all container registries (Docker Hub and GHCR both returned 403 on pull), so `docker build` could not actually be run here. What was checked instead: `docker compose config` accepts the compose file, and each image's steps were reproduced outside Docker in a clean Python 3.12 environment (API: install, export FD001 and FD004 from nothing, serve both; dashboard: only `src/` and `app/` with streamlit/pandas/requests, starts cleanly). Expected to work without modification in any normal environment; genuinely unverified until someone runs `docker compose up --build`.
+- **Testing.** 134 tests across 10 files (`tests/`), covering feature engineering, labeling, models, RSF prediction, deep-survival helpers, evaluation, cross-validation, regime clustering, conformal calibration, and inference. Beyond the unit tests, the API was checked end to end over real HTTP (including rejection of NaN/infinite inputs with a clean 422), and the dashboard was run headlessly against the live API (Streamlit `AppTest`) for FD001, FD004, and the API-down case.
+
+---
+
+## 8. Repository Structure
+
+```
+turbofan-rul/
+├── data/
+│   ├── raw/                            # gitignored, regenerated via data_loading.download_cmapss()
+│   └── processed/                      # small JSON/CSV artifacts kept; .parquet gitignored
+├── notebooks/
+│   ├── 01_eda.ipynb
+│   ├── 02_feature_engineering.ipynb
+│   ├── 03_cox_baseline.ipynb
+│   ├── 04_weibull_aft.ipynb
+│   ├── 05_random_survival_forest.ipynb
+│   ├── 06_evaluation.ipynb
+│   ├── 07_deep_survival_stretch.ipynb          # optional, as planned -- LSTM + Conv1D->LSTM
+│   ├── 08_cross_validation.ipynb               # added: 5-fold CV of the Phase 6 ranking
+│   ├── 09_fd002_fd003_generalization_check.ipynb  # added: eval-only generalization
+│   ├── 10_fd004_full_pipeline.ipynb            # added: full ladder on FD004
+│   ├── 11_hyperparameter_tuning.ipynb          # added: tuning vs. CV and official test set
+│   └── 12_rsf_interval_calibration.ipynb       # added: conformal calibration fix
+├── src/turbofan_rul/
+│   ├── data_loading.py                 # all 4 subsets, not just FD001
+│   ├── features.py                     # rolling stats, trends, health index, regime clustering
+│   ├── labeling.py                     # piecewise RUL labels, (duration, event) construction
+│   ├── models.py                       # Cox/Weibull/RSF wrappers, save/load, engine-level split
+│   ├── evaluation.py                   # C-index, NASA score, calibration
+│   ├── plotting.py                     # shared dark-theme style() and color constants
+│   ├── deep_survival.py                # added: from-scratch hazard MLP + Keras helpers
+│   ├── cross_validation.py             # added: GroupKFold + truncation-point sampling
+│   ├── conformal.py                    # added: cross-conformal interval calibration
+│   ├── inference.py                    # added: single scoring function, used by the API
+│   └── export_deployment_artifacts.py  # added: reproducible artifact build script
+├── api/
+│   ├── main.py                         # FastAPI: /predict, /subsets, /subsets/{s}/metadata
+│   └── Dockerfile                      # added: bakes FD001 + FD004 models; unverified in the sandboxed build env
+├── app/
+│   ├── streamlit_app.py                # NOT gradio_app.py -- switched to Streamlit on request
+│   └── Dockerfile                      # added: unverified in the sandboxed build env
+├── docker-compose.yml                  # added
+├── requirements.txt                    # full dev/notebook dependencies
+├── requirements-api.txt                # added: lean, API-only
+├── requirements-app.txt                # added: leaner still, zero ML dependencies
+├── .dockerignore                       # added
+├── tests/                              # 134 tests across 10 files
+├── models/
+│   ├── fd001/                          # RSF + Weibull + metadata, tuned + calibrated
+│   └── fd004/                          # RSF + Weibull + regime-clustering artifacts
+├── docs/
+│   ├── project_brief.md                # this document
+│   └── architecture_walkthrough.md     # added: chronological build log, every phase
+└── README.md                           # narrative version of this document
+```
+
+Notebooks are used for exploration, derivation, and reporting. Any logic the API depends on lives in `src/`, imported identically by notebooks and services — never inline-only.
+
+---
+
+## 9. Deliverables
+
+1. Cleaned, documented EDA identifying kept/dropped sensors with justification — done for FD001, FD002, FD003, FD004.
+2. Reusable, unit-tested feature-engineering and labeling modules — done, plus regime clustering for multi-regime subsets.
+3. Four trained and compared survival models, each with a stated rationale for inclusion — done; deep survival extended to two architectures (LSTM, Conv1D→LSTM).
+4. A from-scratch mathematical derivation of the Weibull survival function, hazard function, and AFT log-likelihood — done, validated to ≤5.4×10⁻⁷ relative error against `lifelines`, including the likelihood's censoring term.
+5. A model-comparison table across C-index, NASA score, RMSE/MAE, and calibration quality, with a stated deployment justification — done, and re-run under 5-fold CV and on FD004 to confirm it wasn't a single-split artifact.
+6. A deployed FastAPI + **Streamlit** (not Gradio) application returning RUL, confidence interval, and risk flag — done, as two separate HTTP services, containerized (build unverified — see Section 7).
+7. A README presenting the full narrative — done, consolidated from an earlier phase-by-phase status log into the current structure.
+
+**Beyond the original scope:** 5-fold cross-validation, generalization checks on FD002/FD003/FD004, hyperparameter tuning validated on the official test set, conformal interval calibration, and Docker containerization.
+
+---
+
+## 10. Known Gaps (honestly stated, not hidden)
+
+- **FD004 inherits FD001's tuned hyperparameters and has not been independently tuned.** Its RSF interval correction is computed by the export script (36.00 cycles), but the calibrated interval's coverage on FD004's test set hasn't been checked. Both would cost roughly what FD001's versions did, scaled up for FD004's larger size — a time-budget decision, not a technical blocker.
+- **Training labels keep `event=1` at the 125-cycle cap.** The censored alternative was tested and rejected because it breaks the deployed Weibull interval (Section 4); the labels are therefore a convention, not an exact description of those rows.
+- **Docker images are written but unverified.** The build environment used for this project cannot reach any container registry; `docker build` has never actually been run for either image (the steps inside each were reproduced outside Docker — Section 7).
+- **A cross-validation bug was found and fixed late.** `features.add_ewm_features` used `groupby().apply` plus `reset_index`, which misaligned EWM features on any frame whose row index wasn't 0..n-1 — every CV fold, though not the full training frame or the deployed model. It affected only RSF's CV and tuning numbers (Cox/Weibull use no EWM features); all affected notebooks were re-run after the fix, and the main change was that the leaf=5 tuning result went from looking like a 4-of-5-fold winner to 2 of 5.
+- **A fresh-clone smoke test was performed and caught two real bugs.** A tracked-files-only export of this repo into an isolated directory with a fresh virtual environment surfaced that both `api/main.py`'s startup check and `test_inference.py`'s skip condition were checking for a *tracked* file (`deployment_metadata.json`) as a proxy for whether a model was built, when the actual model file (`rsf.joblib`) is gitignored — invisible in a long-lived development environment where the model always existed once built, but a crash-on-missing-model bug on a genuinely fresh clone. Fixed in both places; re-verified with a full fresh install → model export → live API prediction → test run, all producing results identical to the main development environment. This closes the "does it work outside one long-lived sandbox" question for the Python pipeline specifically — Docker remains the one layer that couldn't be verified the same way (see below).
+- **FD002/FD003 are evaluation-only by design**, not partial implementations — RSF only, no tuning, no deployment, deliberately the same weight as an EDA notebook rather than a second full build.
+- **Phase 7's deep-learning numbers are per-seed, not settled.** Training is now deterministic (`keras.utils.set_random_seed` plus `tf.config.experimental.enable_op_determinism()`, so a given seed reproduces exactly), but the official-test-set metrics come from one seed per architecture; only the validation-concordance comparison was repeated across 3 seeds.
+
+---
+
+## 11. Success Criteria
+
+- The censoring structure is correctly built and explicitly documented. **Met.**
+- At least three survival models are implemented, benchmarked, and compared on identical held-out data. **Met and exceeded** — four models (including two deep-learning architectures), compared on a single split, 5-fold CV, and a fourth dataset subset.
+- The NASA asymmetric scoring function is implemented from the literature and reported alongside C-index and RMSE/MAE. **Met.**
+- Calibration is checked and reported for the deployed model's confidence intervals. **Met and extended** — conformal calibration added as a dedicated fix, with its own subgroup-level honesty check.
+- A live API + dashboard accepts sensor input and returns RUL with a confidence interval and risk flag. **Met**, as two properly separated HTTP services; containerized but unverified.
+- The README and project brief together allow a technical reviewer to understand *why* every major decision was made. **This document's revision is part of meeting that criterion** — every section above states what changed from the original plan and why, not just the final state.

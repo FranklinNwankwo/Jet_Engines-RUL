@@ -1,0 +1,31 @@
+# Raw data: regenerable via turbofan_rul.data_loading.download_cmapss()
+data/raw/
+
+# Processed intermediates: regenerable by re-running notebooks 01-02.
+# (The small JSON/CSV/NPY results in data/processed/ ARE tracked --
+# api/Dockerfile needs fd001_sensor_selection.json in particular.)
+data/processed/*.parquet
+
+# Fitted models: regenerable via turbofan_rul.export_deployment_artifacts
+# (python -m turbofan_rul.export_deployment_artifacts --subset FD001|FD004).
+# Each subset's artifacts live in models/<subset>/ (Phase 12d). The RSF
+# alone is ~226MB for FD001 and ~126MB for FD004 with the deployed
+# min_samples_leaf=5 -- over GitHub's 100MB per-file limit, so it can't be
+# versioned at all. deployment_metadata.json stays tracked.
+models/*/*.joblib
+
+# Research snapshots saved by notebooks 03/04/05/07 (Cox, Weibull, RSF and
+# LSTM fit on the 80-engine training split). Nothing loads them -- the API
+# only uses models/<subset>/ -- and re-running the notebooks recreates them.
+models/*.joblib
+models/*.keras
+
+# Local Python virtual environments
+.venv/
+venv/
+env/
+
+__pycache__/
+.pytest_cache/
+.ipynb_checkpoints/
+.streamlit/

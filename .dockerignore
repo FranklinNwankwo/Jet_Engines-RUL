@@ -1,0 +1,27 @@
+# Keeps the build context (and thus image layers) lean. Neither image
+# needs notebooks, raw/processed data (regenerated inside api/Dockerfile),
+# pre-built models (gitignored anyway, and rebuilt fresh at image build
+# time -- see api/Dockerfile), tests, or docs.
+#
+# NOT excluded on purpose: data/processed/fd001_sensor_selection.json,
+# which api/Dockerfile copies in for the FD001 export.
+.git/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ipynb_checkpoints/
+.streamlit/
+# Local virtual environments -- often hundreds of MB, and the images
+# install their own dependencies anyway.
+.venv/
+venv/
+env/
+notebooks/
+docs/
+tests/
+data/raw/
+data/processed/*.parquet
+data/processed/*.csv
+data/processed/*.npy
+models/
+*.md

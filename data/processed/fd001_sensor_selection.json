@@ -1,0 +1,36 @@
+{
+  "subset": "FD001",
+  "cv_threshold": 0.0001,
+  "kept_sensors": [
+    "sensor_2",
+    "sensor_3",
+    "sensor_4",
+    "sensor_7",
+    "sensor_9",
+    "sensor_11",
+    "sensor_12",
+    "sensor_14",
+    "sensor_15",
+    "sensor_17",
+    "sensor_20",
+    "sensor_21"
+  ],
+  "dropped_sensors": {
+    "sensor_1": "near-constant across all engines (coefficient of variation below threshold); carries no degradation signal for this subset",
+    "sensor_5": "near-constant across all engines (coefficient of variation below threshold); carries no degradation signal for this subset",
+    "sensor_16": "near-constant across all engines (coefficient of variation below threshold); carries no degradation signal for this subset",
+    "sensor_10": "near-constant across all engines (coefficient of variation below threshold); carries no degradation signal for this subset",
+    "sensor_19": "near-constant across all engines (coefficient of variation below threshold); carries no degradation signal for this subset",
+    "sensor_18": "near-constant across all engines (coefficient of variation below threshold); carries no degradation signal for this subset",
+    "sensor_8": "near-constant across all engines (coefficient of variation below threshold); carries no degradation signal for this subset",
+    "sensor_13": "near-constant across all engines (coefficient of variation below threshold); carries no degradation signal for this subset",
+    "sensor_6": "near-constant across all engines (coefficient of variation below threshold); carries no degradation signal for this subset"
+  },
+  "flagged_redundant_pairs": [
+    {
+      "sensor_a": "sensor_9",
+      "sensor_b": "sensor_14",
+      "correlation": 0.9632
+    }
+  ]
+}

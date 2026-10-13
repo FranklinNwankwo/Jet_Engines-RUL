@@ -1,0 +1,16 @@
+# Runtime dependencies for app/streamlit_app.py only.
+#
+# This list is short on purpose, and it's a direct, measurable consequence
+# of the HTTP refactor: the dashboard no longer imports turbofan_rul's
+# modeling code (models.py, inference.py's model-loading path) at all --
+# it only calls the API over HTTP and reads the public C-MAPSS dataset for
+# the demo engine picker (data_loading.py, which itself only needs pandas
+# + requests). No scikit-learn, no scikit-survival, no lifelines. Compare
+# to requirements-api.txt.
+#
+# streamlit>=1.50: the app passes width="stretch" to st.line_chart and
+# st.dataframe. Versions 1.49 and older reject that value for
+# st.line_chart with "'stretch' is not of type 'number'".
+streamlit>=1.50
+pandas>=2.0
+requests>=2.31

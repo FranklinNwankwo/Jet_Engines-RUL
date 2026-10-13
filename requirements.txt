@@ -1,0 +1,29 @@
+# Full development environment: notebooks, tests, API and dashboard.
+# The deployed services use the leaner requirements-api.txt and
+# requirements-app.txt instead.
+#
+# Listed because the project imports them directly, not only as
+# dependencies of something else:
+#   joblib  -- models.py saves/loads model artifacts with it
+#   pydantic>=2.0 -- api/main.py uses ConfigDict (pydantic v2 only)
+#   scipy   -- notebooks/04 fits the Weibull MLE with scipy.optimize
+# streamlit>=1.50: the dashboard uses width="stretch", which older
+# versions reject.
+fastapi>=0.100
+joblib>=1.3
+jupyter>=1.0
+lifelines>=0.30
+matplotlib>=3.7
+numpy>=1.24
+pandas>=2.0
+pyarrow>=14.0
+pydantic>=2.0
+pytest>=7.4
+requests>=2.31
+scikit-learn>=1.3
+scikit-survival>=0.28
+scipy>=1.10
+seaborn>=0.13
+streamlit>=1.50
+tensorflow-cpu>=2.15
+uvicorn>=0.23

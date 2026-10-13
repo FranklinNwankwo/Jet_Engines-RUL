@@ -1,0 +1,4 @@
+model,nasa_score,nasa_score_mean,cindex,late_prediction_rate,interval_coverage,rmse,mae
+Cox PH,13532.086,54.565,0.811,0.456,,34.912,27.464
+Weibull AFT,17310.395,69.8,0.812,0.44,0.798,35.644,27.482
+RSF,6811.609,27.466,0.849,0.512,0.706,29.535,22.088

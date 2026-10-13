@@ -1,0 +1,4 @@
+model,nasa_score,val_cindex,test_cindex,late_prediction_rate,interval_coverage,rmse,mae
+Cox PH,1672.503,0.875,0.821,0.54,,22.013,16.907
+Weibull AFT,1288.2,0.864,0.818,0.48,0.9,23.141,18.267
+Random Survival Forest,462.535,0.901,0.864,0.65,0.86,16.265,11.99

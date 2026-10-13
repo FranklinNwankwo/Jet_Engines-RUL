@@ -1,0 +1,38 @@
+# Local orchestration of both services. `docker compose up --build` builds
+# and runs the API and dashboard together, with the dashboard reaching the
+# API at http://api:8000 -- Compose's built-in service-name DNS, not a
+# hardcoded IP or localhost (which wouldn't resolve across containers).
+#
+# For cloud deployment, most platforms (Render, Railway, Fly.io, a cloud
+# provider's container service) want one Dockerfile per service rather
+# than a compose file directly -- point them at api/Dockerfile and
+# app/Dockerfile separately, and set the dashboard's API_BASE_URL
+# environment variable to wherever the API service ends up publicly
+# reachable. This file is for local development and as a reference for
+# that same two-service shape, not the only way to deploy it.
+
+services:
+  api:
+    build:
+      context: .
+      dockerfile: api/Dockerfile
+    ports:
+      - "8000:8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+
+  app:
+    build:
+      context: .
+      dockerfile: app/Dockerfile
+    ports:
+      - "8501:8501"
+    environment:
+      - API_BASE_URL=http://api:8000
+    depends_on:
+      api:
+        condition: service_healthy

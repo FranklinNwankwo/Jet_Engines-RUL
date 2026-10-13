@@ -1,0 +1,235 @@
+# Architecture Walkthrough: How turbofan-rul Was Built, Step by Step
+
+This is the "how did we get here" document; every phase, what triggered it, what was actually built, why, and what came out of it. Read top to bottom for the full architecture, or jump to any phase. `docs/project_brief.md` is the spec (what the project is); this is the build log (how it happened and why each piece exists).
+
+---
+
+## 0. The framing (before any code)
+
+**What was decided:** C-MAPSS turbofan dataset, framed as **survival analysis**, not regression. The reasoning that shaped everything downstream: most real-world equipment hasn't failed yet when you build a model, that's *right censoring*. A regressor trained on observed failures only, or one that treats a censored unit's current age as its true RUL, is trained on a biased sample. Survival analysis models "time-to-event given known to have survived this long," which is the correct estimand.
+
+**Why it mattered structurally:** this decision is why the project has a `labeling.py` module building `(duration, event)` pairs instead of a single `RUL` regression target, why every model is a survival model, and why evaluation includes concordance/NASA-score instead of just RMSE.
+
+---
+
+## Phase 0: Project brief
+
+**What was built:** `docs/project_brief.md` — problem statement, objectives, dataset description, the model ladder (Cox → Weibull → RSF, with a stretch deep-learning phase), evaluation plan, deployment plan, repo structure, explicit non-goals (FD002-004 deferred), success criteria.
+
+**Why:** locks in scope before writing code, so later phases point back to a decision record instead of re-litigating them. This is also the document referenced by name throughout every later phase ("see project_brief.md").
+
+---
+
+## Phase 1: Data acquisition + EDA
+
+**What was built:** `data_loading.py` (downloads from a verified GitHub mirror of the raw NASA files, validates row/unit counts against published dataset statistics after every download so a stale mirror fails loudly) and `notebooks/01_eda.ipynb` (raw sensor trajectory plots, per-sensor coefficient-of-variation screening, correlation heatmap, operating-condition variability check).
+
+**Why URL download:** reproducibility; a fresh clone can regenerate the data without a manual step, and the mirror is checked so silently-wrong data can't slip in unnoticed.
+
+**Why FD002-004 deferred:** they add six operating regimes instead of one, which needs an operating-condition clustering/normalization step the feature pipeline doesn't have. Attempting that alongside the core survival-analysis build would have split effort across two hard problems.
+
+**Real result:** 9 of 21 sensors flagged as near-constant (dropped), 12 kept sensors, one flagged (not auto-dropped) redundant pair (`sensor_9`/`sensor_14`, r = 0.96). One caveat recorded in the notebook: CV divides by the mean, so `sensor_8` and `sensor_13` (both near 2388) are dropped partly because of their large means; much of the C-MAPSS literature keeps them, so this is a judgment call, not proof they carry no signal.
+
+---
+
+## Phase 2: Labeling + feature engineering
+
+**What was built:** `labeling.py` (piecewise-linear RUL capped at 125 cycles; the standard C-MAPSS convention, since early-life cycles carry no degradation signal, plus the `(duration, event)` construction: every training row gets `event=1`, since every training engine runs to an observed failure, and `duration` = the row's remaining life capped at 125 — so the 8,131 of 20,631 FD001 rows at the cap are labeled as failing in exactly 125 cycles, a convention rather than their exact time-to-failure; see Phase 18 for the censored alternative, tested and rejected) and `features.py` (rolling mean/std/min/max/trend-slope across 5/15/30-cycle windows, EWMA, all strictly grouped per-engine so no window ever crosses an engine boundary, checked directly in tests, not just assumed).
+
+**Why this labeling scheme:** it's the one detail that makes the survival framing real rather than decorative, the exact mechanism by which "we know this engine fails eventually" gets encoded without ever using the future.
+
+---
+
+## Phase 3: Cox Proportional Hazards baseline
+
+**What was built:** `models.py`'s `train_val_split_by_engine` (splits on engine ID, never on rows, a row-level split would leak, since consecutive cycles from one engine are correlated) and `notebooks/03_cox_baseline.ipynb`, fitting Cox on a **curated 25-feature subset** (one rolling window's mean+slope per sensor, not all 205 engineered columns).
+
+**Why curated features for Cox specifically:** Cox is being used *for* its interpretability, hazard ratios only mean something if the feature set is small enough to read. Feeding it all 205 correlated columns would produce technically-computable but untrustworthy coefficients.
+
+**Real result:** held-out (row-level validation) concordance 0.875. More importantly: the Schoenfeld-residual proportional-hazards test showed **14 of 25 covariates violate the assumption** at p<0.05 (with engine-clustered robust standard errors, added in Phase 18; the count is if anything overstated, since the test treats correlated rows as independent). This number is the stated reason the next two models get tried, not just "more models to compare."
+
+**Bug caught:** `check_assumptions` initially threw a shape-mismatch error from being passed the full 234-column frame instead of the 25 fitted columns. Fixed by switching to `lifelines.statistics.proportional_hazard_test` against the exact subset.
+
+---
+
+## Phase 4: Weibull AFT
+
+**What was built:** `notebooks/04_weibull_aft.ipynb` — the Weibull survival/hazard/AFT log-likelihood derived by hand in markdown, then validated by fitting an intercept-only version from scratch (NumPy + `scipy.optimize`) and checking it against `lifelines.WeibullFitter` on the same data.
+
+**Why derive AND validate:** this is the project's recurring pattern; don't just cite a formula, prove the implementation matches it. Agreement here was **≤5.4×10⁻⁷ relative error** on both parameters, and 4.6×10⁻⁷ once the likelihood's censoring term was exercised too (8,031 censored rows — a check added in Phase 18).
+
+**Real result:** a Weibull fit to the 100 engines' lifetimes gives shape **ρ = 4.41 (95% CI [3.80, 5.01])**, clearly > 1 — increasing hazard (wear-out), the physical prediction the Weibull choice was based on. (The covariate AFT model's own shape, 2.665 with CI [2.63, 2.70], was originally cited as this evidence; Phase 18 replaced it, since it depends on the row-level labels and its CI treats correlated rows as independent.) Validation concordance 0.864, slightly below Cox's 0.875. 90% confidence interval hit **90.0% empirical coverage** on the real test set, Weibull's actual value-add isn't beating Cox on ranking, it's producing calibrated intervals, which Cox can't.
+
+**Caveat surfaced and documented:** predictions aren't capped at 125 even though training labels were, the fitted distribution is continuous and unbounded, so it can (correctly) predict beyond the cap for healthy-looking engines.
+
+---
+
+## Phase 5: Random Survival Forest
+
+**What was built:** RSF fit on the **full** feature set (229 columns, vs. Cox's 25) via `models.fit_random_survival_forest`, with row-subsampling (`row_stride=3`) justified by an actual measured comparison (strides 1/2/3/5 → validation concordance 0.9033/0.9013/0.9008/0.8972, with stride 1 costing about 7× stride 3's fit time) rather than picked by convenience.
+
+**Why RSF gets the full feature set:** it doesn't share Cox's interpretability goal and handles collinearity natively.
+
+**Real result:** validation concordance **0.901** (row-level, same split as Cox and Weibull), the best of the three so far, consistent with Phase 3's finding that proportional hazards is badly violated (RSF doesn't assume it). Permutation importance (measured on held-out engines, not training rows) showed engineered rolling/EWMA features outranking the raw sensors they came from, the empirical payoff of Phase 2's feature engineering.
+
+**Real limitation found and fixed:** RSF's survival curve is only defined over the training time support (~125 cycles), so the **median** RUL estimate silently saturates at the ceiling for 28 of 100 test engines. Switched the point estimate to **restricted mean survival time** (area under the curve) instead, MAE improved from 13.35 to 11.99, and only 3 engines saturate instead of 28.
+
+---
+
+## Phase 6: Evaluation
+
+**What was built:** `evaluation.py` — the **NASA asymmetric scoring function**, implemented from the C-MAPSS literature (not imported), penalizing late predictions (predicted more life than exists which is outrightly dangerous) harder than early ones (predicted less, merely costly), via two different exponential-decay constants. Unit-tested specifically for the asymmetry: if the two constants were ever swapped, the metric would silently reward the wrong behavior.
+
+**Why not RMSE as the headline:** RMSE is symmetric, it can't distinguish a dangerous late error from a merely-costly early one.
+
+**Real findings, the two that matter most:**
+
+1. **RMSE and the NASA score disagree** about which of Cox/Weibull is better. Cox wins RMSE (22.01 vs 23.14); Weibull wins NASA score (1288.2 vs 1672.5) because its errors sit on the safer side. A comparison run on RMSE alone would have picked the wrong model for the actual maintenance decision.
+
+2. **RSF has the best NASA score AND the highest late-prediction rate (65%).** It's late more often but by smaller margins — the exponential penalty means many small late errors cost less than a few large ones.
+
+**Engine-level test concordance** (added in Phase 18, so every cross-model comparison uses the same metric): Cox 0.821, Weibull 0.818, RSF 0.864.
+
+**Deployment decision, made here:** RSF for point estimate/ranking, **Weibull AFT for the confidence interval** (RSF's own intervals under-cover at 86%, and RSF can't extrapolate past its training ceiling). Cox isn't deployed: RSF beats it on every point-estimate and ranking metric, and it has no natural interval. (Against Weibull, Cox isn't uniformly worse — it has the better test C-index, RMSE and MAE — but neither is the deployed point model.)
+
+---
+
+## Phase 7: Deep survival model (stretch) — the phase with the most course-correction
+
+This phase went through three distinct versions, which is worth tracing since it's the clearest example of the project's iterate-until-complete pattern.
+
+**v1 — from-scratch NumPy MLP.** Built a discrete-time hazard neural net entirely in NumPy — forward pass, hand-derived backprop, gradient-checked against finite differences.
+
+**v2 — Keras LSTM.** Used `tensorflow-cpu`, a genuine CPU-only PyPI package. Rebuilt around an actual `keras.layers.LSTM`, with the NumPy work repositioned as validation of the loss function (cross-checked to produce the identical value as the Keras loss on identical inputs) rather than the deliverable itself. Caught a real overfitting problem in the process, 150 fixed epochs scored *worse* than 80, fixed with early stopping on validation loss.
+
+**v3 — follow-up checks.** The coverage weakness and (at the time) run-to-run non-determinism were documented in the notebook, quantifying both rather than leaving them for a reader to notice in a column of numbers.
+
+**Effective Baseline:** Built the combined **Conv1D→LSTM** architecture and, given the just-documented non-determinism, compared it against the plain LSTM across **3 seeds each** rather than one run.
+
+**Final honest result (re-run in Phase 18 with deterministic training — `keras.utils.set_random_seed` plus `tf.config.experimental.enable_op_determinism()`):** the plain LSTM had the higher validation concordance on all 3 seeds (0.880 vs. 0.871, a gap 2.5× the larger seed-to-seed std) — the CNN front-end didn't help on ~80 training engines. On the official test set, neither beats RSF: C-index 0.838 (LSTM) / 0.843 (Conv1D→LSTM) vs. 0.864, NASA score 846 / 967 vs. 463, interval coverage 73% / 74%. Reported as directly as a win would have been. (An earlier version called the two architectures "statistically tied" at 0.879 vs. 0.871 and compared them with RSF's 0.901 — a validation figure; see Phase 18.)
+
+---
+
+## Phase 8/9: Deployment (API + dashboard)
+
+**What was built:** `export_deployment_artifacts.py` (a standalone, deterministic script, not notebook state, that refits RSF + Weibull on **all** training engines, since the 80/20 split's job was evaluation, which is already done); `inference.py` (the single scoring function, at this point imported directly by both the API and the dashboard rather than duplicated — the dashboard moved to HTTP-only in Phase 15); `api/main.py` (FastAPI, tested with real predictions and all error paths via `TestClient`); `app/streamlit_app.py` (verified end-to-end through headless-browser automation, not just "it started without crashing").
+
+**Real bug caught:** building the export script forced explicit enumeration of every column RSF needs, which surfaced that Phase 5's "full feature set" silently included raw passthrough values for all 21 sensors and 3 operating settings, not just the 12 Phase 1 flagged as informative. **Decision at the time:** keep the model exactly as evaluated (retraining then would have invalidated the reported Phase 6 numbers), document the gap in three places, and adjust the API contract to require the raw telemetry the model actually needs. **Later measured, not left as an assumption — see Phase 17.**
+
+**Also caught:** RSF's point estimate can fall outside Weibull's own confidence interval (they're independent models scoring the same input so nothing forces agreement). Surfaced explicitly in the API response (`point_estimate_outside_interval`) rather than left to look like a bug.
+
+---
+
+## Phase 10: README consolidation
+
+**What changed:** the README had grown into a phase-by-phase status log through the build. Rewritten as a top-to-bottom narrative; problem framing → censoring argument → feature engineering → model ladder (each model justified by what the previous one's diagnostics showed) → evaluation methodology → results → deployment → a dedicated "bugs caught along the way" section → scope notes. `project_brief.md` stayed untouched as the technical spec; the README became the story.
+
+---
+
+## Phase 11: 5-fold cross-validation
+
+**What was built:** `cross_validation.py` — `GroupKFold` by engine (5 folds), with held-out engines scored at a **randomly sampled mid-life truncation point** (30-90% of observed lifetime) rather than their final cycle, which would trivially be RUL=0 for a full run-to-failure trajectory. This mirrors how NASA actually built the official test set.
+
+**Real result (after the Phase 18 EWM fix):** RSF has the strictly best concordance in 4 of 5 folds — in the fifth (fold 2), Weibull is best (0.883) and RSF ties Cox (0.878) — and the best mean NASA score, winning 3 of 5 folds. That confirms the Phase 6 ranking isn't an artifact of one lucky split. The more interesting finding: **RSF's standard deviation across folds (0.019) is roughly a third of Cox's and Weibull's (~0.05)** — it's not just the best model on average, it's the most *stable* one, a property the original single split had no way to show. Absolute numbers are a little lower than on the official test set (RSF 0.850 vs. 0.864, both engine-level) — expected, since random mid-life truncation is a different task than NASA's specific chosen truncation points, and the CV RSF uses a coarser `row_stride=5`.
+
+---
+
+## Phase 12: FD004 generalization (a-through-d)
+
+**12a — the missing pipeline piece.** `features.py` gained regime clustering (`fit_regime_clusters`, KMeans on the 3 operating settings) and within-cluster normalization, validated on real FD002 data: one sensor's raw variance was **99.99% explained by which regime an engine was in**, not degradation, confirming the step does real work, not assumed to.
+
+**12b — FD002/FD003, evaluation-only.** RSF only, no tuning, no deployment, deliberately the same weight as the original Phase 1 EDA. FD003 (fault modes only) generalized close to the FD001 baseline; FD002 (regimes only) was a real step down even with the clustering fix working correctly.
+
+**12c — FD004, full ladder.** Cox PH, Weibull AFT, and RSF, evaluated against FD004's official test set exactly as Phase 6 did for FD001. RSF won again (concordance 0.849 vs. Cox's 0.811 and Weibull's 0.812; NASA score per engine 27.5 vs. 54.6 and 69.8), a third independent piece of evidence for the same ranking, this time under genuine distribution shift rather than just a different split of the same data. One FD001 finding didn't carry over: on FD004, Cox beats Weibull on both RMSE and NASA score, so FD001's RMSE-vs-NASA disagreement isn't a general rule.
+
+**A real bug caught mid-build:** `data_loading.py`'s published-statistics validation — built in Phase 1 to catch a corrupted mirror, caught that FD004's train/test engine counts were transposed in this project's own reference table (248/249 instead of 249/248), a transcription error from when FD002-004 support was first added. The check did exactly its job, just against an internal bug instead of the external one it was written for.
+
+**12d — deployment extended, not tripled.** `export_deployment_artifacts.py`, `inference.py`, the API, and the dashboard all became subset-parameterized. Verified two ways: FD001's predictions came out byte-identical to before the refactor (nothing broke), and FD004 worked end-to-end through both `TestClient` and a real headless-browser click-through of the subset selector.
+
+---
+
+## Phase 13: hyperparameter tuning
+
+**What was built:** Cox/Weibull penalizer search across a full 5-fold grid — the existing default (0.1) turned out already near-optimal, confirmed rather than assumed. For RSF, `max_features="sqrt"` clearly beat `"log2"`; a narrower single-fold search found leaf sizes 3, 5 and 8 tied, and `min_samples_leaf=5` was compared with the original default of 30 across all 5 folds.
+
+**The cross-validation evidence (as re-run after the Phase 18 EWM fix) is mixed:** leaf=5 has the higher mean concordance (0.855 vs. 0.841) but wins only 2 of 5 folds — mostly from one big gain in fold 2 — and has about 2.5× the fold-to-fold variance (std 0.032 vs. 0.013), giving up the stability Phase 11 had flagged as one of RSF's virtues.
+
+**So it was checked on the official FD001 test set, like-for-like** (both trained on all 100 engines, same stride): leaf=5 was better on every metric — C-index 0.859 → 0.864, NASA score per engine 4.51 → 4.04, MAE 12.0 → 11.3, RMSE 16.3 → 15.5, late rate 62% → 57%, coverage 86% → 87% — mostly by small margins. Deployed on that basis, with the weak CV support stated. A cost not shown in that table: the tuned model's file size grew from ~44MB to ~216MB (smaller leaves mean deeper, larger trees).
+
+**Corrected in Phase 18:** the original version of this phase reported CV wins in 4 of 5 folds (inflated by the EWM bug) and a concordance "regression" on the test set (0.901 → 0.864). The regression wasn't real: 0.901 was a row-level validation C-index from an 80-engine model, compared against an engine-level test C-index from a 100-engine model.
+
+---
+
+## Phase 14: RSF interval calibration
+
+**What was built:** cross-conformal prediction (`conformal.py`) — each of the 100 training engines scored by a model fit on the other 4 folds, pooling calibration data without holding any engine out of the final deployed model. Calibrated correction: 5.00 cycles, added to both interval bounds (re-run in Phase 18 with the fold models using the deployed `row_stride=3`, so the notebook's correction matches the deployed artifact's exactly).
+
+**Validated on the real official test set, and here's where it got interesting:** coverage moved from 0.870 to almost exactly 0.900 — it held on unseen engines, not just on the calibration set, though as an empirical result rather than a guarantee. In aggregate, the calibrated RSF interval now looked *strictly better* than the deployed Weibull interval: better coverage (0.900 vs. 0.890) and 40% narrower (59.6 vs. 98.6 cycles mean width). That would have justified simplifying the whole deployment to RSF alone, except checking by subgroup (the same instinct behind Phase 6's calibration-by-risk-bin analysis) found the aggregate number was hiding a near-total failure: coverage on the 11 engines above RSF's structural training-time ceiling collapsed to 27.3%, versus Weibull's 90.9% on those same engines. A uniform correction can't manufacture support a model never had.
+
+**Decision:** Weibull stays the primary deployed interval, this result *confirmed* the original Phase 6 pairing for a reason now demonstrated, not assumed. The calibrated RSF interval ships as a clearly-labeled, explicitly non-authoritative supplementary field. The export script computes the correction for every subset it builds, FD004 included (36.00 cycles), though FD004's calibrated coverage hasn't been checked on its test set.
+
+---
+
+## Phase 15: proper two-service architecture + containerization
+
+**The HTTP refactor.** `app/streamlit_app.py` had been calling `inference.predict()` in-process as a documented demo simplification. Now the dashboard imports no modeling code at all, and calls the API's `/predict`, `/subsets`, and new `/subsets/{subset}/metadata` endpoints (added so the frontend can discover required columns without touching model artifacts) over HTTP, with the API's address read from an `API_BASE_URL` environment variable rather than hardcoded. Verified for real, a live `uvicorn` server and a live Streamlit process, driven through an actual browser click via Playwright, with the API's own access log confirming the full round-trip (`/health` → `/subsets` → `/subsets/{subset}/metadata` → `/predict`) actually happened.
+
+**A direct, measurable consequence of that refactor:** splitting `requirements.txt` into `requirements-api.txt` and `requirements-app.txt` showed the dashboard's dependency list no longer needed scikit-learn, scikit-survival, or lifelines at all, it literally cannot load a model anymore, by construction.
+
+**Docker: written, honestly not verified.** Separate Dockerfiles for the API (bakes the FD001 model in at build time, accepting a slow build for an instant start — FD004 added in Phase 18) and the dashboard (lean, zero ML dependencies), plus a `docker-compose.yml`. Installing Docker itself and starting its daemon worked fine in this sandbox — but every `docker build` failed with a 403 on the base-image pull, from both Docker Hub and GHCR. The sandbox's network allowlist covers package registries (PyPI, npm, GitHub) but no container registry at all. Disclosed directly rather than claimed as working: this is the one piece of the project that was written to standard patterns and reasoned through, but never actually executed.
+
+---
+
+## Phase 16: fresh-clone verification
+
+**What was done:** the repo was initialized as a git repository specifically so `.gitignore` could be trusted to define exactly what a real clone would contain, then `git archive` exported precisely that tracked set into a completely separate directory. A fresh Python virtual environment, `pip install -r requirements.txt` from nothing, and the full test suite immediately surfaced 19 errors, not because anything was broken, but because the fresh directory correctly had no pre-built models (as designed — they're gitignored, too large to version).
+
+**Two real bugs, invisible until this exact test.** Both `api/main.py`'s startup check and `test_inference.py`'s skip condition inferred "is a model built?" from the presence of `deployment_metadata.json`, a small file that IS tracked in git. The actual model (`rsf.joblib`) is not. Fixed in both places to check for `rsf.joblib` directly.
+
+**Re-verified for real, not just patched and assumed fixed:** a full FD001 export run from the fresh clone (genuine downloads, confirmed by the log — nothing cached), the API starting and serving a live prediction over HTTP, and the complete test suite; every result identical to the main development environment, including the exact same conformal correction (5.00 cycles) and the exact same point prediction (116.9 cycles) seen throughout this entire project. `project_brief.md` and this document were both updated to reflect that this gap is closed, and the README gained a fifth documented bug.
+
+---
+
+## Phase 17: measuring the Phase 8/9 feature-scope bug instead of just documenting it
+
+**What prompted it:** a direct challenge to the Phase 8/9 decision — "keep the model as evaluated, document the gap" was pragmatic, not evidenced. No one had ever measured how much the leak actually mattered, and every phase since (CV, tuning, calibration) had silently inherited the same confounded feature set. A proposal to restrict RSF to Cox/Weibull's exact 25-column curated set was considered and set aside: that would strip not just the 24 columns that were never supposed to be there, but 180 of RSF's 205 legitimately-scoped engineered columns too — a materially different, narrower experiment than fixing the actual bug.
+
+**What was measured:** a second RSF, identical hyperparameters (`min_samples_leaf=5`, matching the Phase 13-tuned deployed model), fit on the corrected 205-column engineered-only feature set, evaluated against the same official FD001 test set as the deployed 229-column model. Every metric moved by less than ordinary random-forest run-to-run variance, in no consistent direction: C-index −0.0004, NASA score actually 0.065 *better*, MAE +0.09, late rate +0.03, coverage −0.03. The "plausible, given tree ensembles' random per-split feature subsampling" hypothesis from Phase 8/9, now confirmed with a number instead of asserted.
+
+**Decision:** nothing retrained, nothing rerun. Per the plan agreed before running the ablation — a negligible result means tightening the documentation, not redoing Phase 6, the CV baseline, tuning, or calibration on a corrected model. `README.md`'s bug #1 now reports this comparison in place of the earlier unmeasured "documenting the gap" language (added in Phase 18 — an earlier version of this document said it had been added before it actually was). The ablation was run on the full training frame, which the Phase 18 EWM bug didn't affect, so its numbers stand.
+
+---
+
+## Phase 18: correctness review and corrections
+
+**What prompted it:** a file-by-file review of every source file, test, notebook, deployment file and document, checking each claim against what the code actually does and re-running everything affected.
+
+**Real bugs found and fixed:**
+- **EWM features misaligned on CV folds.** `features.add_ewm_features` used `groupby().apply` + `reset_index(level=0)`, which only lines up on a frame whose index runs 0..n-1. The full training frame (and so the deployed model) was fine, but every CV fold's filtered frame got misaligned or missing EWM values. Fixed with `groupby().transform`; `build_feature_matrix` now rejects frames with duplicate indexes or rows out of cycle order. It affected only RSF's CV and tuning numbers — and it mattered: Phase 13's leaf=5 result went from "wins 4 of 5 folds" to 2 of 5.
+- **Two C-indices compared as one.** Row-level validation C (0.901 for RSF) had been put side by side with engine-level test C (0.864). Every model now reports an engine-level test C-index, used for all cross-model, cross-notebook and cross-subset comparisons; this removed Phase 13's phantom "regression" and corrected Phase 7's and Phase 12's comparisons.
+- **API returned 500 instead of 422 on infinite inputs.** `SensorReading` now rejects NaN/infinity (`allow_inf_nan=False`), and a custom validation-error handler stops the error response from trying to echo the invalid number back. The dashboard also gained readable API-error messages and a clean message if the API goes down mid-session.
+- **Dependency floors.** `requirements-api.txt` gained `joblib` (imported directly by `models.py`); `requirements-app.txt` raised Streamlit to `>=1.50`, since older versions reject the `width="stretch"` charts the dashboard uses.
+
+**Method changes:**
+- Cox fit with engine-clustered robust standard errors (14/25 PH violations, not 18/25); Weibull's wear-out evidence switched to the per-engine lifetime fit (ρ = 4.41); a censoring-term check added to the Weibull derivation.
+- Keras training made deterministic, so deep-model results reproduce exactly per seed.
+- RSF calibration notebook aligned with the deployed recipe (`row_stride=3`).
+- Input validation tightened in `data_loading.py`, `evaluation.py` and `cross_validation.py` (which now raises instead of silently dropping engines).
+
+**Tested and rejected — censoring the capped rows.** `labeling.build_train_survival_frame(..., censor_above_cap=True)` marks rows above the 125-cycle cap as censored instead of failing at 125. Cox improved slightly and RSF was unchanged, but Weibull AFT broke (FD001 NASA score from ~1.3×10³ to ~2×10¹⁰, interval width ~100 → 184 cycles). Since Weibull supplies the deployed interval, the default stays all-`event=1`.
+
+**Deployment:** `api/Dockerfile` now exports FD004 as well as FD001; both exports and the API serving both subsets were reproduced outside Docker in a clean Python 3.12 environment, and `docker compose config` accepts the compose file.
+
+**Re-run:** all 12 notebooks re-executed on the corrected code; the test suite grew to 134 tests across 10 files; README and project brief updated to match.
+
+---
+
+## Where things stand
+
+**Done, verified with real execution:** the full survival-analysis framing and censoring argument; the complete model ladder (Cox → Weibull → RSF → two deep-learning architectures), each addition justified by the previous model's diagnostics; domain-appropriate evaluation (NASA score primary, RMSE secondary); 5-fold cross-validation confirming the ranking isn't a single-split artifact; generalization checks across three additional dataset subsets; hyperparameter tuning validated against both CV and the real official test set; a conformal-prediction fix for RSF's interval coverage, validated by subgroup rather than trusted in aggregate; the Phase 8/9 feature-scope leak, measured rather than left as a documented assumption; a properly separated two-service HTTP architecture, fresh-clone verified end to end (install → export → serve → test, from nothing); a full correctness review (Phase 18) with every notebook re-run; 134 tests across 10 files; and a README, project brief and architecture walkthrough that match the actual current state rather than the original plan.
+
+**Genuinely outstanding — everything left, and nothing more:**
+
+- Docker images are written and reasoned through but never actually built. Needs running in an environment with normal registry access.
+- No hosted/public cloud deployment yet (blocked behind Docker verification).
+- FD004 hasn't been independently tuned — it inherits FD001's hyperparameters — and its conformal correction (36.00 cycles) is computed but its coverage on FD004's test set hasn't been checked. A stated time-budget decision, not a technical blocker.
