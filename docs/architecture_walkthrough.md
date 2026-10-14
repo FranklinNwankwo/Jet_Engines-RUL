@@ -27,7 +27,8 @@ This is the "how did we get here" document; every phase, what triggered it, what
 21. [Phase 20: testing the survival framing itself](#21-phase-20-testing-the-survival-framing-itself)
 22. [Phase 21: README rewritten for readers, detail moved to a technical report](#22-phase-21-readme-rewritten-for-readers-detail-moved-to-a-technical-report)
 23. [Phase 22: continuous integration](#23-phase-22-continuous-integration)
-24. [Where things stand](#24-where-things-stand)
+24. [Phase 23: Docker, finally built](#24-phase-23-docker-finally-built)
+25. [Where things stand](#25-where-things-stand)
 
 ---
 
@@ -203,7 +204,7 @@ This phase went through three distinct versions, which is worth tracing since it
 
 **A direct, measurable consequence of that refactor:** splitting `requirements.txt` into `requirements-api.txt` and `requirements-app.txt` showed the dashboard's dependency list no longer needed scikit-learn, scikit-survival, or lifelines at all, it literally cannot load a model anymore, by construction. (Still true of the Docker dashboard image; Phase 19 added a separate, opt-in embedded mode for the public demo.)
 
-**Docker: written, honestly not verified.** Separate Dockerfiles for the API (bakes the FD001 model in at build time, accepting a slow build for an instant start — FD004 added in Phase 18) and the dashboard (lean, zero ML dependencies), plus a `docker-compose.yml`. Installing Docker itself and starting its daemon worked fine in this sandbox — but every `docker build` failed with a 403 on the base-image pull, from both Docker Hub and GHCR. The sandbox's network allowlist covers package registries (PyPI, npm, GitHub) but no container registry at all. Disclosed directly rather than claimed as working: this is the one piece of the project that was written to standard patterns and reasoned through, but never actually executed.
+**Docker: written, honestly not verified.** Separate Dockerfiles for the API (bakes the FD001 model in at build time, accepting a slow build for an instant start — FD004 added in Phase 18) and the dashboard (lean, zero ML dependencies), plus a `docker-compose.yml`. Installing Docker itself and starting its daemon worked fine in this sandbox — but every `docker build` failed with a 403 on the base-image pull, from both Docker Hub and GHCR. The sandbox's network allowlist covers package registries (PyPI, npm, GitHub) but no container registry at all. Disclosed directly rather than claimed as working: this is the one piece of the project that was written to standard patterns and reasoned through, but not executed until Phase 23 built it in CI.
 
 ---
 
@@ -293,12 +294,26 @@ This phase went through three distinct versions, which is worth tracing since it
 
 ---
 
-## 24. Where things stand
+## 24. Phase 23: Docker, finally built
 
-**Done, verified with real execution:** the full survival-analysis framing and censoring argument; the complete model ladder (Cox → Weibull → RSF → two deep-learning architectures), each addition justified by the previous model's diagnostics; domain-appropriate evaluation (NASA score primary, RMSE secondary); 5-fold cross-validation confirming the ranking isn't a single-split artifact; generalization checks across three additional dataset subsets; hyperparameter tuning validated against both CV and the real official test set; a conformal-prediction fix for RSF's interval coverage, validated by subgroup rather than trusted in aggregate; the Phase 8/9 feature-scope leak, measured rather than left as a documented assumption; a properly separated two-service HTTP architecture, fresh-clone verified end to end (install → export → serve → test, from nothing); a full correctness review (Phase 18) with every notebook re-run; the survival framing tested under simulated censoring, with a mixed result reported as measured (Phase 20); a short README with results first and a full technical report (Phase 21); a redesigned dashboard live at [https://jetengines-rul.streamlit.app/](https://jetengines-rul.streamlit.app/) (Phase 19); 150 tests across 11 files run by GitHub Actions (Phase 22); and a README, project brief and architecture walkthrough that match the actual current state rather than the original plan.
+**The gap:** since Phase 15 the Dockerfiles had been written and reasoned through but never built, because the sandbox blocked every container registry. That was the last claim in the project resting on reasoning rather than execution.
+
+**What was built:** a separate workflow, `.github/workflows/docker.yml`, kept out of `tests.yml` because the API image exports both models during its build. It runs `docker compose build`, starts both services with `docker compose up --wait` (gated on the API's healthcheck), waits for the dashboard's health endpoint, then pipes `scripts/docker_smoke_test.py` into each container:
+
+- **API container:** `/health` lists FD001 and FD004; test engine 1 of each gets a prediction in the expected range with an ordered interval; an empty request is rejected with 422.
+- **Dashboard container:** the API is reachable at `http://api:8000` over the Compose network, and the real dashboard, run headlessly in HTTP mode, makes a prediction through it.
+
+Running the checks inside the containers, rather than from the runner, is what tests the service-name networking the deployment depends on.
+
+**Verified:** the smoke script was first run against the real API and a dashboard environment with no ML libraries, outside Docker (all checks pass, same 121 [52, 237] and 33 [13, 59] predictions). The first GitHub Actions run then built both images and passed in about 9 minutes. The job runs weekly, on demand, and on pushes that touch anything inside the images.
+
+---
+
+## 25. Where things stand
+
+**Done, verified with real execution:** the full survival-analysis framing and censoring argument; the complete model ladder (Cox → Weibull → RSF → two deep-learning architectures), each addition justified by the previous model's diagnostics; domain-appropriate evaluation (NASA score primary, RMSE secondary); 5-fold cross-validation confirming the ranking isn't a single-split artifact; generalization checks across three additional dataset subsets; hyperparameter tuning validated against both CV and the real official test set; a conformal-prediction fix for RSF's interval coverage, validated by subgroup rather than trusted in aggregate; the Phase 8/9 feature-scope leak, measured rather than left as a documented assumption; a properly separated two-service HTTP architecture, fresh-clone verified end to end (install → export → serve → test, from nothing); a full correctness review (Phase 18) with every notebook re-run; the survival framing tested under simulated censoring, with a mixed result reported as measured (Phase 20); a short README with results first and a full technical report (Phase 21); a redesigned dashboard live at [https://jetengines-rul.streamlit.app/](https://jetengines-rul.streamlit.app/) (Phase 19); 150 tests across 11 files run by GitHub Actions (Phase 22); both Docker images built and smoke-tested in CI (Phase 23); and a README, project brief and architecture walkthrough that match the actual current state rather than the original plan.
 
 **Genuinely outstanding — everything left, and nothing more:**
 
-- Docker images are written and reasoned through but never actually built. Needs running in an environment with normal registry access.
 - The public demo runs in one process (embedded mode), not as the two-service deployment — a free-hosting constraint (Phase 19). Its models must be re-uploaded to the Hugging Face repo after every re-export, with `app/requirements.txt`'s pins kept in step.
 - FD004 hasn't been independently tuned — it inherits FD001's hyperparameters — and its conformal correction (36.00 cycles) is computed but its coverage on FD004's test set hasn't been checked. A stated time-budget decision, not a technical blocker.

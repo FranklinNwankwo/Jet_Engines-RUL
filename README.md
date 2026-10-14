@@ -1,5 +1,4 @@
 # Turbofan engine remaining useful life — survival analysis
-![tests](https://github.com/FranklinNwankwo/Jet_Engines-RUL/actions/workflows/tests.yml/badge.svg)
 
 **Live demo: [jetengines-rul.streamlit.app](https://jetengines-rul.streamlit.app/)** — pick a test engine and click *Predict remaining life* (the first load after a quiet period takes a minute or two).
 
@@ -8,9 +7,9 @@
 - **Headline result:** the Random Survival Forest wins on NASA's official FD001 test set — **test C-index 0.864, mean error 11.3 cycles, NASA score 4.0 per engine**, a NASA score 2.8× better than Weibull's and 3.6× better than Cox's. The lead holds across 5-fold cross-validation and on the harder FD004 subset.
 - **Deployed:** RSF gives the prediction and Weibull AFT gives the 90% interval (RSF's own interval fails for long-lived engines). Served by a FastAPI service and a Streamlit dashboard.
 - **Tested the premise:** with simulated censoring, survival models clearly beat a regression that treats unfinished engines as failed — but a regression that drops them was competitive, a result reported as found.
-- **Engineering:** shared `src/` package, reproducible export script, 150 tests run by GitHub Actions on every push (including a check of the live demo's models), Docker setup, live demo.
+- **Engineering:** shared `src/` package, reproducible export script, 150 tests run by GitHub Actions on every push (including a check of the live demo's models), Docker images built and smoke-tested in CI, live demo.
 
-![Dashboard](docs/images/dashboard.png)  
+![Dashboard](docs/images/dashboard.png)
 
 ## Table of contents
 
@@ -117,6 +116,8 @@ The notebooks in `notebooks/` run in order, `01_eda` through `13_censoring_exper
 
 **CI.** `.github/workflows/tests.yml` runs the test suite on every push. A second job installs exactly what the live demo installs (`app/requirements.txt`, Python 3.11), downloads the models from Hugging Face and runs the dashboard in embedded mode with real predictions (`tests/test_dashboard_embedded.py`), so a library-version mismatch with the uploaded models fails CI instead of the live site. It needs one repository variable: **Settings → Secrets and variables → Actions → Variables → `MODEL_REPO`** = your Hugging Face model repo. To run the embedded-mode test locally, set `MODELS_DIR=models` (or `MODEL_REPO`) before `pytest`.
 
+**Docker CI.** `.github/workflows/docker.yml` builds both images with `docker compose`, starts them, and runs `scripts/docker_smoke_test.py` inside each container: the API must serve FD001 and FD004 predictions in the expected range (and reject a bad request with 422), and the dashboard must reach the API over the Compose network and make a prediction through it. It runs weekly, on demand, and on pushes that change anything inside the images (about 9 minutes, most of it the in-image model export).
+
 ---
 
 ## 5. Repository
@@ -125,6 +126,7 @@ The notebooks in `notebooks/` run in order, `01_eda` through `13_censoring_exper
 ├── notebooks/            # 01 EDA → 12 interval calibration → 13 censoring experiment
 ├── src/turbofan_rul/     # data loading, labeling, features, models, evaluation, CV, conformal, inference, export
 ├── tests/                # 150 tests (GitHub Actions: .github/workflows/tests.yml)
+├── scripts/              # Docker smoke test (GitHub Actions: .github/workflows/docker.yml)
 ├── api/                  # FastAPI service + Dockerfile
 ├── app/                  # Streamlit dashboard, Community Cloud requirements, Dockerfile
 ├── .streamlit/           # dashboard theme
@@ -139,7 +141,6 @@ The notebooks in `notebooks/` run in order, `01_eda` through `13_censoring_exper
 - **FD001 gets the full treatment.** FD004 reuses FD001's tuned hyperparameters, and its calibrated interval's coverage hasn't been checked. FD002 and FD003 are evaluation-only.
 - **Censoring convention.** Training labels treat rows beyond the 125-cycle cap as failures at 125, the standard convention. Censoring those rows instead broke the Weibull model, so it was rejected.
 - **The survival-vs-regression evidence comes from simulated censoring** on FD001, with untuned regressors.
-- **The Docker images have not been built yet.** The build environment blocked container registries; everything inside the images was run and tested outside Docker.
 - **The live demo runs in one process** (embedded mode), not as two services. This is a free-hosting constraint.
 
 ---
