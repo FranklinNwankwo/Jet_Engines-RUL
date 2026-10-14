@@ -10,7 +10,7 @@
 - **Tested the premise:** with simulated censoring, survival models clearly beat a regression that treats unfinished engines as failed — but a regression that drops them was competitive, a result reported as found.
 - **Engineering:** shared `src/` package, reproducible export script, 150 tests run by GitHub Actions on every push (including a check of the live demo's models), Docker setup, live demo.
 
-![Dashboard](docs/images/turbofan_rul_dashboard.png)
+![Dashboard](docs/images/dashboard.png)  
 
 ## Table of contents
 
