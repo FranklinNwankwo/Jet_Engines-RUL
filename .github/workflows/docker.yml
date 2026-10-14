@@ -1,0 +1,71 @@
+# Builds both Docker images and smoke-tests the two-service deployment
+# (docker-compose.yml): real predictions through the API, and the dashboard
+# predicting through the API over the Compose network.
+#
+# Separate from tests.yml because the API image exports both models during
+# the build (~20 min). Runs on demand (Actions tab -> docker -> Run workflow),
+# weekly, and on pushes that change something inside the images.
+name: docker
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 3 * * 1"          # Mondays 03:00 UTC
+  push:
+    branches: [main]
+    paths:
+      - "api/**"
+      - "app/**"
+      - "src/**"
+      - "docker-compose.yml"
+      - "requirements-api.txt"
+      - "requirements-app.txt"
+      - ".dockerignore"
+      - ".streamlit/**"
+      - "data/processed/fd001_sensor_selection.json"
+      - "scripts/docker_smoke_test.py"
+      - ".github/workflows/docker.yml"
+
+concurrency:
+  group: docker-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  compose-smoke-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build images
+        run: docker compose build
+
+      - name: Start services
+        # --wait blocks until the API healthcheck passes and the app is running.
+        run: docker compose up -d --wait --wait-timeout 300
+
+      - name: Wait for the dashboard
+        run: |
+          for i in $(seq 1 60); do
+            curl -sf http://localhost:8501/_stcore/health && exit 0
+            sleep 5
+          done
+          echo "dashboard never became healthy"; exit 1
+
+      - name: Smoke test the API container
+        run: docker compose exec -T api python - api < scripts/docker_smoke_test.py
+
+      - name: Smoke test the dashboard container
+        run: docker compose exec -T app python - app < scripts/docker_smoke_test.py
+
+      - name: Image sizes
+        if: always()
+        run: docker images --format "table {{.Repository}}\t{{.Size}}"
+
+      - name: Container logs
+        if: failure()
+        run: docker compose logs
+
+      - name: Stop services
+        if: always()
+        run: docker compose down
