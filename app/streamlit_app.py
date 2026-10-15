@@ -278,6 +278,8 @@ def subset_metadata(subset: str) -> dict:
             "raw_passthrough_cols": bundle.raw_passthrough_cols,
             "uses_regime_clustering": bundle.uses_regime_clustering,
             "recommended_min_history_cycles": RECOMMENDED_MIN_HISTORY_CYCLES,
+            "model_version": bundle.model_version,
+            "test_metrics": (bundle.manifest or {}).get("test_metrics"),
         }
     try:
         return _http_metadata(subset)
@@ -554,6 +556,13 @@ with st.sidebar:
         f"{'regime-normalised (6 operating regimes)' if metadata['uses_regime_clustering'] else 'single operating regime'} · "
         f"{metadata['recommended_min_history_cycles']}+ cycles of history recommended"
     )
+    # Older APIs don't report a version; show it only when there is one.
+    version = metadata.get("model_version")
+    if version:
+        metrics = metadata.get("test_metrics") or {}
+        detail = (f" · test C-index {metrics['c_index']:.3f}, interval coverage "
+                  f"{metrics['interval_coverage']:.0%}" if metrics.get("c_index") is not None else "")
+        st.caption(f"Model version `{version}`{detail}")
     st.divider()
     with st.expander("How it works"):
         st.markdown(

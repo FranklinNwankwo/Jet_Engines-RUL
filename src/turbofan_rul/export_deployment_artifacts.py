@@ -66,7 +66,7 @@ from lifelines import WeibullAFTFitter
 from sklearn.model_selection import GroupKFold
 from sklearn.preprocessing import StandardScaler
 
-from . import conformal, cross_validation, data_loading, features, interval_calibration, labeling, models
+from . import conformal, cross_validation, data_loading, features, interval_calibration, labeling, manifest, models
 
 logger = logging.getLogger(__name__)
 
@@ -266,7 +266,14 @@ def build_and_save(subset: str, data_dir: Path, processed_dir: Path, models_dir:
     with open(subset_models_dir / "deployment_metadata.json", "w") as f:
         json.dump(metadata, f, indent=2)
 
-    logger.info("Saved artifacts for %s to %s", subset, subset_models_dir)
+    # Version the export (manifest.py): content hash, data and code
+    # provenance, library versions, and test-set metrics measured through
+    # the serving path. Scoring the official test set adds ~30s (FD001) to
+    # ~90s (FD004).
+    logger.info("Writing manifest (scores the official test set through inference.predict)...")
+    written = manifest.write_manifest(subset, models_dir, data_dir)
+    logger.info("Saved artifacts for %s to %s -- model version %s", subset, subset_models_dir,
+                written["model_version"])
 
 
 if __name__ == "__main__":

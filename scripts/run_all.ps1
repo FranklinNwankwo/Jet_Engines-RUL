@@ -94,9 +94,13 @@ Write-Host "`n=== key results" -ForegroundColor Cyan
 # quotes from arguments passed to native programs.
 python -c @'
 import json
+from turbofan_rul import manifest
 for s in ('fd001', 'fd004'):
     m = json.load(open('models/' + s + '/deployment_metadata.json'))
-    print('  ' + s + ': RSF interval correction q = %.2f' % m['rsf_interval_correction'])
+    version, stale = manifest.verified_version('models/' + s)
+    print('  ' + s + ': RSF interval correction q = %.2f, model version %s' % (m['rsf_interval_correction'], version))
+    if stale:
+        print('      (no up-to-date manifest -- run: python -m turbofan_rul.manifest --subset ' + s.upper() + ')')
 '@
 if ($LASTEXITCODE -ne 0) {
     Write-Host "Could not read the deployment metadata." -ForegroundColor Red

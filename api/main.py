@@ -3,10 +3,15 @@ FastAPI service: recent sensor readings in, RUL + confidence interval +
 risk flag out.
 
 All scoring logic lives in `turbofan_rul.inference` -- this module is a thin
-HTTP wrapper around it. The Streamlit dashboard (`app/streamlit_app.py`) is a
-pure HTTP client of this API: it calls `/subsets`, `/subsets/{subset}/metadata`
-and `/predict` over HTTP and imports no modeling code itself, so this service
-is the only place models are loaded.
+HTTP wrapper around it. In the Docker deployment the Streamlit dashboard
+(`app/streamlit_app.py`) is a pure HTTP client of this API: it calls
+`/subsets`, `/subsets/{subset}/metadata` and `/predict` over HTTP and imports
+no modeling code itself. (The public demo runs the dashboard in embedded
+mode instead, calling the same `inference.predict` in-process.)
+
+Every response that depends on a model carries its `model_version`
+(`manifest.py`), so a prediction can be traced to the exact artifacts,
+data, code and test-set metrics that produced it.
 
 Multi-subset support (Phase 12d): both FD001 and FD004 bundles are loaded
 at startup (whichever have been built via `export_deployment_artifacts.py`
@@ -139,6 +144,7 @@ class PredictRequest(BaseModel):
 
 class PredictResponse(BaseModel):
     subset: str
+    model_version: str
     predicted_rul_cycles: float
     confidence_interval_90: list[float]
     point_estimate_outside_interval: bool
@@ -155,11 +161,15 @@ class SubsetMetadata(BaseModel):
     raw_passthrough_cols: list[str]
     uses_regime_clustering: bool
     recommended_min_history_cycles: int
+    model_version: str
+    test_metrics: dict | None = None
 
 
 @app.get("/health")
 def health() -> dict:
-    return {"status": "ok", "subsets_loaded": list(_state.get("bundles", {}).keys())}
+    bundles = _state.get("bundles", {})
+    return {"status": "ok", "subsets_loaded": list(bundles.keys()),
+            "model_versions": {s: b.model_version for s, b in bundles.items()}}
 
 
 @app.get("/subsets")
@@ -191,6 +201,8 @@ def subset_metadata(subset: str) -> dict:
         "raw_passthrough_cols": bundle.raw_passthrough_cols,
         "uses_regime_clustering": bundle.uses_regime_clustering,
         "recommended_min_history_cycles": 30,
+        "model_version": bundle.model_version,
+        "test_metrics": (bundle.manifest or {}).get("test_metrics"),
     }
 
 

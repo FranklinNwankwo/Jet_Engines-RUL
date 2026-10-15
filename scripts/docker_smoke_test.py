@@ -38,6 +38,9 @@ def api_mode():
     base = "http://localhost:8000"
     health = requests.get(f"{base}/health", timeout=30).json()
     check(set(CHECKS) <= set(health["subsets_loaded"]), f"/health lists {sorted(CHECKS)}: {health}")
+    versions = health.get("model_versions", {})
+    check(all(versions.get(s, "unversioned") != "unversioned" for s in CHECKS),
+          f"the image's export wrote verified manifests: {versions}")
 
     for subset, (lo, hi) in CHECKS.items():
         meta = requests.get(f"{base}/subsets/{subset}/metadata", timeout=30).json()
@@ -47,6 +50,7 @@ def api_mode():
         resp = requests.post(f"{base}/predict", json={"subset": subset, "readings": readings}, timeout=60)
         check(resp.status_code == 200, f"{subset} /predict returns 200 (got {resp.status_code})")
         r = resp.json()
+        check(r["model_version"] == versions[subset], f"{subset} prediction reports model {r['model_version']}")
         low, high = r["confidence_interval_90"]
         check(lo <= r["predicted_rul_cycles"] <= hi,
               f"{subset} prediction {r['predicted_rul_cycles']:.1f} cycles within [{lo}, {hi}]")

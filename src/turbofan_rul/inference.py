@@ -40,7 +40,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from . import conformal, features, interval_calibration, models
+from . import conformal, features, interval_calibration, manifest, models
 
 # Risk-band thresholds on the RSF point estimate, in cycles. These are an
 # illustrative default policy, not a value learned from data -- a real
@@ -75,6 +75,11 @@ class DeploymentBundle:
     # metadata; they get the Phase 24 interval, which needs no fitted
     # correction (hybrid base, no calibration), so old exports serve it too.
     interval: interval_calibration.IntervalCalibration = None
+    # Content-derived version from manifest.json (see manifest.py), or
+    # "unversioned" when there is no manifest or the artifacts no longer
+    # match it. Reported with every prediction.
+    model_version: str = manifest.UNVERSIONED
+    manifest: dict | None = None
 
     def __post_init__(self):
         if self.interval is None:
@@ -85,11 +90,15 @@ class DeploymentBundle:
         return self.regime_kmeans is not None
 
 
-def load_deployment_bundle(models_dir: Path | str) -> DeploymentBundle:
+def load_deployment_bundle(models_dir: Path | str, verify_manifest: bool = True) -> DeploymentBundle:
     """Load one subset's deployment bundle. `models_dir` must point at a
     subset-specific directory (e.g. `models/fd001/`, `models/fd004/`), not
     the shared `models/` parent -- each subset's artifacts live in their
-    own subdirectory so they never collide (see export_deployment_artifacts.py)."""
+    own subdirectory so they never collide (see export_deployment_artifacts.py).
+
+    With `verify_manifest=True` (the default) the artifacts are re-hashed
+    and the bundle reports the manifest's version only if they still match
+    it (about a second for FD001's ~226 MB forest); otherwise "unversioned"."""
     models_dir = Path(models_dir)
     with open(models_dir / "deployment_metadata.json") as f:
         meta = json.load(f)
@@ -100,7 +109,7 @@ def load_deployment_bundle(models_dir: Path | str) -> DeploymentBundle:
         regime_kmeans = models.load_model(models_dir / "regime_kmeans.joblib")
         regime_norm_stats = models.load_model(models_dir / "regime_norm_stats.joblib")
 
-    return DeploymentBundle(
+    bundle = DeploymentBundle(
         subset=meta["subset"],
         kept_sensors=meta["kept_sensors"],
         curated_feature_cols=meta["curated_feature_cols"],
@@ -117,6 +126,11 @@ def load_deployment_bundle(models_dir: Path | str) -> DeploymentBundle:
         interval=(interval_calibration.IntervalCalibration.from_dict(meta["interval"])
                   if "interval" in meta else None),
     )
+    if verify_manifest:
+        bundle_manifest = manifest.load_manifest(models_dir)
+        bundle.model_version, _ = manifest.verified_version(models_dir, bundle_manifest)
+        bundle.manifest = bundle_manifest
+    return bundle
 
 
 class InvalidReadingsError(ValueError):
@@ -225,6 +239,7 @@ def predict(bundle: DeploymentBundle, readings: pd.DataFrame) -> dict:
 
     return {
         "subset": bundle.subset,
+        "model_version": bundle.model_version,
         "predicted_rul_cycles": predicted_rul_out,
         "confidence_interval_90": [ci_low_out, ci_high_out],
         "point_estimate_outside_interval": point_outside_interval,
