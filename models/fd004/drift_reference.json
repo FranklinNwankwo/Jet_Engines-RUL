@@ -1,6 +1,6 @@
 {
  "subset": "FD004",
- "created_at": "2026-10-15T16:07:29Z",
+ "created_at": "2026-10-15T20:00:32Z",
  "n_reference_rows": 16925,
  "construction": {
   "n_draws": 5,
@@ -509,6 +509,102 @@
     0.100089,
     0.10003
    ]
+  }
+ },
+ "familiarity": {
+  "low": {
+   "op_setting_1": 0.0,
+   "op_setting_2": 0.0,
+   "op_setting_3": 60.0,
+   "sensor_2_roll15_mean": -1.3208842804662286,
+   "sensor_3_roll15_mean": -1.558223990748202,
+   "sensor_4_roll15_mean": -1.5187946164047745,
+   "sensor_6_roll15_mean": -2.633248332077639,
+   "sensor_7_roll15_mean": -1.4800151814035356,
+   "sensor_8_roll15_mean": -1.6394888150746831,
+   "sensor_9_roll15_mean": -1.4092667711434643,
+   "sensor_10_roll15_mean": -1.8609692648485827,
+   "sensor_11_roll15_mean": -1.6220864940556379,
+   "sensor_12_roll15_mean": -1.538077706478286,
+   "sensor_13_roll15_mean": -1.6404267058805353,
+   "sensor_14_roll15_mean": -1.4849864302404132,
+   "sensor_15_roll15_mean": -2.660049831773712,
+   "sensor_16_roll15_mean": -0.17377833305876225,
+   "sensor_17_roll15_mean": -1.571551885585569,
+   "sensor_20_roll15_mean": -1.537956830001358,
+   "sensor_21_roll15_mean": -1.514563445819598
+  },
+  "high": {
+   "op_setting_1": 42.008,
+   "op_setting_2": 0.842,
+   "op_setting_3": 100.0,
+   "sensor_2_roll15_mean": 1.9577286250620052,
+   "sensor_3_roll15_mean": 1.8015587084353382,
+   "sensor_4_roll15_mean": 2.0900069767255767,
+   "sensor_6_roll15_mean": 1.0485827145914766,
+   "sensor_7_roll15_mean": 3.3722571739319993,
+   "sensor_8_roll15_mean": 2.700335311364639,
+   "sensor_9_roll15_mean": 3.4116218136618675,
+   "sensor_10_roll15_mean": 2.7911312480771295,
+   "sensor_11_roll15_mean": 2.112049715961701,
+   "sensor_12_roll15_mean": 3.4494381485388974,
+   "sensor_13_roll15_mean": 2.701423983986897,
+   "sensor_14_roll15_mean": 3.4200629648561107,
+   "sensor_15_roll15_mean": 1.7457239422612751,
+   "sensor_16_roll15_mean": 0.6130385138344108,
+   "sensor_17_roll15_mean": 1.8477888274970704,
+   "sensor_20_roll15_mean": 2.0468702928405254,
+   "sensor_21_roll15_mean": 2.0618777769283336
+  },
+  "operating_columns": [
+   "op_setting_1",
+   "op_setting_2",
+   "op_setting_3"
+  ],
+  "sensor_columns": [
+   "sensor_2_roll15_mean",
+   "sensor_3_roll15_mean",
+   "sensor_4_roll15_mean",
+   "sensor_6_roll15_mean",
+   "sensor_7_roll15_mean",
+   "sensor_8_roll15_mean",
+   "sensor_9_roll15_mean",
+   "sensor_10_roll15_mean",
+   "sensor_11_roll15_mean",
+   "sensor_12_roll15_mean",
+   "sensor_13_roll15_mean",
+   "sensor_14_roll15_mean",
+   "sensor_15_roll15_mean",
+   "sensor_16_roll15_mean",
+   "sensor_17_roll15_mean",
+   "sensor_20_roll15_mean",
+   "sensor_21_roll15_mean"
+  ],
+  "thresholds": {
+   "operating": 0.05,
+   "sensors": 0.1254
+  },
+  "calibration": {
+   "method": "half-split of training engines, every cycle >= 30",
+   "quantiles": {
+    "operating": 0.999,
+    "sensors": 0.99
+   },
+   "n_splits": 5,
+   "held_out_flag_rate_by_remaining_life": {
+    "operating": {
+     "<=10": 0.0,
+     "11-25": 0.0,
+     "26-50": 0.0,
+     ">50": 0.0
+    },
+    "sensors": {
+     "<=10": 0.087,
+     "11-25": 0.0347,
+     "26-50": 0.0104,
+     ">50": 0.0025
+    }
+   }
   }
  }
 }

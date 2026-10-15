@@ -29,6 +29,7 @@ import argparse
 import os
 import sys
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 
 from . import manifest
@@ -116,12 +117,19 @@ def publish(api, repo_id: str, subsets: list[str], models_dir: Path | str = "mod
     info = api.create_commit(repo_id=repo_id, repo_type="model", operations=operations,
                              commit_message="Publish " + ", ".join(p.model_version for p in plans))
     commit = getattr(info, "oid", None)
+    # Model-version tags stay on the first commit that published that model
+    # (exist_ok), so a publish that only adds small files (e.g. a rebuilt drift
+    # reference) also gets a release tag naming this exact commit -- that is
+    # the one to pin the live demo to.
+    release = "release-" + datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
     for p in plans:
         api.create_tag(repo_id, tag=p.model_version, revision=commit, repo_type="model", exist_ok=True,
                        tag_message=f"{p.subset} model {p.model_version}")
-    print(f"Committed {commit} and tagged it {', '.join(p.model_version for p in plans)}.")
-    print(f"To pin the live demo to these models, set MODEL_REVISION = {plans[0].model_version}")
-    return {"commit": commit, "tags": [p.model_version for p in plans]}
+    api.create_tag(repo_id, tag=release, revision=commit, repo_type="model", exist_ok=True,
+                   tag_message="Publish " + ", ".join(p.model_version for p in plans))
+    print(f"Committed {commit}; tags {', '.join(p.model_version for p in plans)} and {release}.")
+    print(f"To pin the live demo to exactly this commit, set MODEL_REVISION = {release}")
+    return {"commit": commit, "tags": [p.model_version for p in plans], "release": release}
 
 
 def main(argv: list[str] | None = None) -> None:

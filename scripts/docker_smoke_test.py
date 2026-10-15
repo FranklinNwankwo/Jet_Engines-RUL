@@ -51,6 +51,8 @@ def api_mode():
         check(resp.status_code == 200, f"{subset} /predict returns 200 (got {resp.status_code})")
         r = resp.json()
         check(r["model_version"] == versions[subset], f"{subset} prediction reports model {r['model_version']}")
+        check((r.get("input_check") or {}).get("status") == "familiar",
+              f"{subset} engine 1 passes the input check: {(r.get('input_check') or {}).get('status')}")
         low, high = r["confidence_interval_90"]
         check(lo <= r["predicted_rul_cycles"] <= hi,
               f"{subset} prediction {r['predicted_rul_cycles']:.1f} cycles within [{lo}, {hi}]")

@@ -7,7 +7,7 @@
 - **Headline result:** the Random Survival Forest wins on NASA's official FD001 test set — **test C-index 0.864, mean error 11.3 cycles, NASA score 4.0 per engine**, a NASA score 2.8× better than Weibull's and 3.6× better than Cox's. The lead holds across 5-fold cross-validation and on the harder FD004 subset.
 - **Deployed:** RSF gives the prediction; the 90% interval combines RSF and Weibull AFT (lower bound = the more cautious of RSF's and Weibull's, upper bound = Weibull's), because each model's interval fails at one end of the remaining-life range. Served by a FastAPI service and a Streamlit dashboard.
 - **Tested the premise:** with simulated censoring, survival models clearly beat a regression that treats unfinished engines as failed — but a regression that drops them was competitive, a result reported as found.
-- **Engineering:** shared `src/` package, reproducible export script, 209 tests run by GitHub Actions on every push (including a check of the live demo's models), Docker images built and smoke-tested in CI, versioned models, drift monitoring and a champion/challenger retraining gate, live demo.
+- **Engineering:** shared `src/` package, reproducible export script, 217 tests run by GitHub Actions on every push (including a check of the live demo's models), Docker images built and smoke-tested in CI, versioned models, drift monitoring and a champion/challenger retraining gate, live demo.
 
 ![Dashboard](docs/images/dashboard.png)
 
@@ -100,7 +100,7 @@ pip install -r requirements.txt
 export PYTHONPATH=src                       # PowerShell: $env:PYTHONPATH = "src"
 python -m turbofan_rul.export_deployment_artifacts --subset FD001
 python -m turbofan_rul.export_deployment_artifacts --subset FD004   # optional
-pytest tests/ -v                            # 209 tests
+pytest tests/ -v                            # 217 tests
 
 # Dashboard against the API (two terminals):
 uvicorn api.main:app --reload
@@ -119,7 +119,7 @@ The notebooks in `notebooks/` run in order, `01_eda` through `17_drift_monitorin
 
 **Docker CI.** `.github/workflows/docker.yml` builds both images with `docker compose`, starts them, and runs `scripts/docker_smoke_test.py` inside each container: the API must serve FD001 and FD004 predictions in the expected range (and reject a bad request with 422), and the dashboard must reach the API over the Compose network and make a prediction through it. It runs weekly, on demand, and on pushes that change anything inside the images (about 9 minutes, most of it the in-image model export).
 
-**Operations.** Each exported model carries a `manifest.json` with a version derived from its files (e.g. `fd001-3328802d81b0`), the git commit, data hashes, library versions and test-set metrics; the API and dashboard report which version answered, and `python -m turbofan_rul.publish` uploads and tags versions on Hugging Face (the live demo is pinned to one with `MODEL_REVISION`). The API's `GET /drift` compares the last 500 requests with a training reference (PSI, thresholds calibrated on training engines): replays show no false alarms on FD001's and FD004's own fleets and immediate alarms for FD002 and FD003 traffic ([notebook 17](notebooks/17_drift_monitoring.ipynb)). `.github/workflows/retrain.yml` retrains a challenger, compares it with the published champion on fixed rules (`gate.py`) and publishes it only if it passes; a challenger trained on 30% of the engines was rejected (NASA score 13% worse).
+**Operations.** Each exported model carries a `manifest.json` with a version derived from its files (e.g. `fd001-3328802d81b0`), the git commit, data hashes, library versions and test-set metrics; the API and dashboard report which version answered, and `python -m turbofan_rul.publish` uploads and tags versions on Hugging Face (the live demo is pinned to one with `MODEL_REVISION`). The API's `GET /drift` compares the last 500 requests with a training reference (PSI, thresholds calibrated on training engines): replays show no false alarms on FD001's and FD004's own fleets and immediate alarms for FD002 and FD003 traffic ([notebook 17](notebooks/17_drift_monitoring.ipynb)). `.github/workflows/retrain.yml` retrains a challenger, compares it with the published champion on fixed rules (`gate.py`) and publishes it only if it passes; a challenger trained on 30% of the engines was rejected (NASA score 13% worse). Every prediction also carries an **input check** (`input_check` in the API, a badge on the dashboard): *familiar*, *caution* (sensors outside the training range) or *unfamiliar* (operating conditions never seen in training). Calibrated on held-out training engines; on the test sets it marks 100% of FD001's engines familiar, 90% of FD002's unfamiliar and 45% of FD003's as caution under the FD001 model. The live demo lets visitors pick engines from other fleets to see it.
 
 ---
 
@@ -129,7 +129,7 @@ The notebooks in `notebooks/` run in order, `01_eda` through `17_drift_monitorin
 ├── notebooks/            # 01 EDA → 12 interval calibration → 13 censoring experiment → 14–15 interval fix → 16 uncapped upper bound → 17 drift
 ├── src/turbofan_rul/     # data loading, labeling, features, models, evaluation, CV, conformal, inference, export,
 │                         #   operations: manifest (versions), drift, gate (retraining), publish (Hugging Face)
-├── tests/                # 209 tests (GitHub Actions: .github/workflows/tests.yml; retraining: retrain.yml)
+├── tests/                # 217 tests (GitHub Actions: .github/workflows/tests.yml; retraining: retrain.yml)
 ├── scripts/              # Docker smoke test (GitHub Actions: .github/workflows/docker.yml)
 ├── api/                  # FastAPI service + Dockerfile
 ├── app/                  # Streamlit dashboard, Community Cloud requirements, Dockerfile

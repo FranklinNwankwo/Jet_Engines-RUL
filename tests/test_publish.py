@@ -50,7 +50,8 @@ def test_identical_models_upload_only_the_small_files(tmp_path):
     out = publish.publish(api, "u/repo", ["FD001"], tmp_path)
     assert api.commits == [["fd001/deployment_metadata.json", "fd001/manifest.json"]]
     version = manifest.load_manifest(d)["model_version"]
-    assert api.tags == [(version, "c0ffee")] and out["tags"] == [version]
+    assert api.tags[0] == (version, "c0ffee") and out["tags"] == [version]
+    assert api.tags[1][0] == out["release"] and out["release"].startswith("release-")
 
 
 def test_changed_model_file_is_refused_without_full(tmp_path):
@@ -83,7 +84,8 @@ def test_two_subsets_go_in_one_commit_with_one_tag_each(tmp_path):
     api = FakeApi({"fd001": _remote_same_as(d1), "fd004": _remote_same_as(d4)})
     publish.publish(api, "u/repo", ["FD001", "FD004"], tmp_path)
     assert len(api.commits) == 1 and len(api.commits[0]) == 4
-    assert [t for t, _ in api.tags] == [manifest.load_manifest(d)["model_version"] for d in (d1, d4)]
+    assert [t for t, _ in api.tags][:2] == [manifest.load_manifest(d)["model_version"] for d in (d1, d4)]
+    assert len(api.tags) == 3 and all(rev == "c0ffee" for _, rev in api.tags)
 
 
 def test_dry_run_uploads_nothing(tmp_path):

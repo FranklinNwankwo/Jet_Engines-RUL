@@ -125,3 +125,46 @@ def test_calibration_falls_back_to_textbook_for_tiny_fleets():
     t = drift.calibrate_thresholds(raw, raw[["unit_number", "time_cycles"]], ["x"], n_splits=2)
     assert (t["warning"], t["drift"]) == (drift.WARNING_PSI, drift.DRIFT_PSI)
     assert t["calibration"]["n_windows"] == 0
+
+
+def _fam_reference():
+    return {"familiarity": {
+        "low": {"op_setting_1": -1.0, "s_roll15_mean": 0.0}, "high": {"op_setting_1": 1.0, "s_roll15_mean": 10.0},
+        "operating_columns": ["op_setting_1"], "sensor_columns": ["s_roll15_mean"],
+        "thresholds": {"operating": 0.05, "sensors": 0.07}}}
+
+
+@pytest.mark.parametrize("op,sensor,expected", [
+    (0.5, 5.0, "familiar"), (0.5, 11.0, "caution"), (0.5, 10.5, "familiar"), (1.2, 5.0, "unfamiliar"), (30.0, 50.0, "unfamiliar"),
+    (1.05, 5.0, "familiar"),   # 2.5% of the range outside: under the 0.05 threshold
+])
+def test_familiarity_verdicts(op, sensor, expected):
+    r = drift.familiarity(_fam_reference(), pd.Series({"op_setting_1": op, "s_roll15_mean": sensor}))
+    assert r["status"] == expected
+    if expected != "familiar":
+        assert r["outside_training_range"] and r["outside_training_range"][0]["training_range"]
+
+
+def test_familiarity_is_none_without_reference_section():
+    assert drift.familiarity(None, pd.Series({"x": 1.0})) is None
+    assert drift.familiarity({"features": {}}, pd.Series({"x": 1.0})) is None
+
+
+_HAVE_FD003 = _HAVE and (REPO_ROOT / "data/raw/test_FD003.txt").exists()
+
+
+@pytest.mark.skipif(not _HAVE_FD003, reason="needs the FD001 bundle, its reference and FD001-FD003 test data")
+def test_input_check_on_real_fleets():
+    from turbofan_rul import data_loading, inference
+    bundle = inference.load_deployment_bundle(REPO_ROOT / "models" / "fd001", verify_manifest=False)
+    if "familiarity" not in (bundle.drift_reference or {}):
+        pytest.skip("drift reference predates the input check -- rerun python -m turbofan_rul.drift")
+    rates = {}
+    for fleet in ["FD001", "FD002", "FD003"]:
+        test = data_loading.load_subset(fleet, data_dir=REPO_ROOT / "data" / "raw").test
+        last = inference.featurize(bundle, test).groupby("unit_number").tail(1)
+        statuses = [drift.familiarity(bundle.drift_reference, last.iloc[[i]])["status"] for i in range(len(last))]
+        rates[fleet] = pd.Series(statuses).value_counts(normalize=True)
+    assert rates["FD001"].get("familiar", 0) >= 0.95
+    assert rates["FD002"].get("unfamiliar", 0) >= 0.80
+    assert rates["FD003"].get("unfamiliar", 0) == 0 and rates["FD003"].get("caution", 0) >= 0.25

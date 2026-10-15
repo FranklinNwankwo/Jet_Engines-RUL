@@ -43,7 +43,7 @@ def test_predict_returns_expected_keys(bundle, sample_readings):
     result = inference.predict(bundle, sample_readings)
     assert set(result.keys()) == {
         "subset", "model_version", "predicted_rul_cycles", "confidence_interval_90", "point_estimate_outside_interval",
-        "risk_level", "cycles_observed", "model_source", "weibull_interval_90",
+        "risk_level", "cycles_observed", "model_source", "weibull_interval_90", "input_check",
         "rsf_calibrated_interval_supplementary",
     }
 

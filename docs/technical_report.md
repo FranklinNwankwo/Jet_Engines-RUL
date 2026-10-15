@@ -318,7 +318,7 @@ turbofan-rul/
 ├── docker-compose.yml                 # local two-service orchestration
 ├── requirements-api.txt               # lean, API-only deps (no jupyter/matplotlib/tensorflow)
 ├── requirements-app.txt               # leaner still -- streamlit + pandas + requests, nothing ML
-├── tests/                             # 209 tests across 16 files
+├── tests/                             # 217 tests across 16 files
 └── models/
     ├── fd001/                         # RSF + Weibull + metadata for FD001
     └── fd004/                         # RSF + Weibull + regime-clustering artifacts for FD004
@@ -333,7 +333,7 @@ python -m turbofan_rul.export_deployment_artifacts --subset FD004   # optional -
 uvicorn api.main:app --reload                          # API on :8000
 API_BASE_URL=http://localhost:8000 streamlit run app/streamlit_app.py   # dashboard on :8501 (HTTP mode)
 MODELS_DIR=models streamlit run app/streamlit_app.py                    # or: no API, models loaded in-app
-pytest tests/ -v                                       # 209 tests
+pytest tests/ -v                                       # 217 tests
 
 # Containerized, both services:
 docker compose up --build
@@ -367,6 +367,8 @@ docker compose up --build
 | FD002 → FD004 | 100% | RMSE 27.4 — fine: drift is not harm |
 
 The price of no false alarms is sensitivity: a window needs about 30% foreign requests before it fires.
+
+**Per-engine input check (`drift.familiarity`).** PSI needs hundreds of requests, so each single prediction gets its own check: how far its inputs sit outside what the model saw in training (all training rows from cycle 30, failure included). Operating settings, which don't wear, are checked against the full min–max range and drive a red *unfamiliar* verdict; sensors' rolling means are checked against the 0.5th–99.5th percentile band and drive an amber *caution*. Thresholds come from held-out training engines (99.9th percentile for red, 99th for amber). Two design errors were caught by measuring before shipping: a range taken from the fleet-like drift reference flagged 12% of engines in their last 10 cycles (it stops at 99% of life; the model trained on full lives), and percentile bands on the raw operating settings put one normal FD001 engine in red because of a single noisy reading. Result on the official test sets: FD001 engines under the FD001 model are 100% familiar; FD002's are 90% unfamiliar and 10% caution; FD003's are 45% caution (median 58 cycles left, so a different fault rather than wear) and never red; under the FD004 model, trained on all regimes and both fault modes, engines from every subset are 98–100% familiar. Amber is still expected in an engine's last ~10 cycles (12% of held-out training engines there), and the message says so.
 
 **Retraining gate (`gate.py`, `.github/workflows/retrain.yml`).** A run retrains a challenger on GitHub's machine with the live demo's pinned libraries, downloads the champion's manifest from Hugging Face, and applies four rules fixed in advance: NASA score per engine at most 5% worse, C-index at most 0.01 lower, interval coverage at least 85%, near-failure coverage at most 5 points lower. The challenger is published (and tagged) only if all pass and publishing was requested; making it live stays a manual change of `MODEL_REVISION`. Both outcomes were exercised: the deployed recipe retrained passed with identical metrics; a challenger trained on 30 of 100 engines was rejected on the NASA rule (4.59 vs 4.05) while its C-index and coverage passed, which is why the gate checks more than one metric. The rules use the official test set, acceptable for a no-worse-than check but not for choosing among many challengers.
 

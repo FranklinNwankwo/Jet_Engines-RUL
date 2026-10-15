@@ -71,9 +71,9 @@ async def lifespan(app: FastAPI):
     # One drift monitor per subset that has a reference (drift.py). The
     # window is in memory, so it starts empty after every restart.
     _state["monitors"] = {
-        subset: drift.DriftMonitor(ref)
-        for subset in bundles
-        if (ref := drift.load_reference(MODELS_DIR / subset.lower())) is not None
+        subset: drift.DriftMonitor(bundle.drift_reference)
+        for subset, bundle in bundles.items()
+        if bundle.drift_reference is not None
     }
     yield
     _state.clear()
@@ -159,6 +159,7 @@ class PredictResponse(BaseModel):
     cycles_observed: int
     model_source: dict
     weibull_interval_90: list[float]
+    input_check: dict | None = None
     rsf_calibrated_interval_supplementary: dict
 
 

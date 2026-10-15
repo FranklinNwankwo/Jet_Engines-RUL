@@ -81,6 +81,19 @@ SUBSET_INFO = {
     "FD001": {"short": "1 regime · 1 fault", "desc": "1 operating regime · 1 fault mode", "tag": "baseline"},
     "FD004": {"short": "6 regimes · 2 faults", "desc": "6 operating regimes · 2 fault modes", "tag": "hardest subset"},
 }
+# Fleets a visitor can draw sample engines from. Engines from a fleet the
+# selected model wasn't trained on show what the input check does.
+FLEETS = {
+    "FD001": "1 operating regime · 1 fault mode",
+    "FD002": "6 operating regimes · 1 fault mode",
+    "FD003": "1 operating regime · 2 fault modes",
+    "FD004": "6 operating regimes · 2 fault modes",
+}
+INPUT_CHECK_STYLE = {
+    "familiar": {"label": "Familiar inputs", "color": "#22C55E"},
+    "caution": {"label": "Caution: sensors outside training range", "color": "#F5A524"},
+    "unfamiliar": {"label": "Unfamiliar operating conditions", "color": "#EF4444"},
+}
 
 st.set_page_config(
     page_title="Turbofan RUL · Survival Analysis",
@@ -438,6 +451,29 @@ def card(label: str, value: str, unit: str = "", sub: str = "", value_color: str
             f'<div class="value"{style}>{html.escape(value)}{unit_html}</div>{sub_html}</div>')
 
 
+def render_input_check(check: dict | None) -> None:
+    """The "familiar inputs?" badge (drift.familiarity). Hidden when the
+    backend predates it."""
+    if not check:
+        return
+    style = INPUT_CHECK_STYLE[check["status"]]
+    st.markdown(
+        f'<div style="margin:.6rem 0 .2rem 0"><span class="risk-badge" style="background:{style["color"]}22;'
+        f'color:{style["color"]};border:1px solid {style["color"]}66"><span class="risk-dot" '
+        f'style="background:{style["color"]}"></span>{style["label"]}</span>'
+        f'<span class="muted" style="margin-left:.7rem">{html.escape(check["message"])}</span></div>',
+        unsafe_allow_html=True,
+    )
+    if check["outside_training_range"]:
+        with st.expander("Which inputs are outside the training range?"):
+            st.dataframe(pd.DataFrame([
+                {"input": o["feature"], "value": o["value"],
+                 "training range": f'{o["training_range"][0]:g} to {o["training_range"][1]:g}'}
+                for o in check["outside_training_range"]]), hide_index=True, width="stretch")
+            st.caption("Operating settings are checked against the full range seen in training; sensors "
+                       "(15-cycle rolling means) against the 0.5th-99.5th percentile band.")
+
+
 def render_prediction(result: dict, true_rul: float | None = None) -> None:
     risk = RISK_STYLE[result["risk_level"]]
     pred = result["predicted_rul_cycles"]
@@ -455,6 +491,8 @@ def render_prediction(result: dict, true_rul: float | None = None) -> None:
              f'style="background:{risk["color"]}"></span>{risk["label"]}</div>'
              f'<div class="sub">{html.escape(risk["note"])}</div></div>')
     c3.markdown(badge, unsafe_allow_html=True)
+
+    render_input_check(result.get("input_check"))
 
     st.markdown('<div class="section-title">Where this engine sits</div>', unsafe_allow_html=True)
     st.altair_chart(rul_chart(result, true_rul), width="stretch")
@@ -587,15 +625,22 @@ if "results" not in st.session_state:
 tab_demo, tab_upload = st.tabs(["🛩️  Sample engine", "📤  Upload your own readings"])
 
 with tab_demo:
-    test_df, rul_lookup = get_demo_engines(selected_subset)
-    unit_ids = sorted(test_df["unit_number"].unique())
+    test_df, _ = get_demo_engines(selected_subset)          # the model's own fleet (upload tab template)
+    fleet_options = [selected_subset] + [f for f in FLEETS if f != selected_subset]
+    fleet = st.selectbox(
+        "Engines from", fleet_options, index=0,
+        format_func=lambda f: (f"{f} — the fleet this model was trained on" if f == selected_subset
+                               else f"{f} — a different fleet ({FLEETS[f]}), to see the input check"),
+    )
+    fleet_df, rul_lookup = get_demo_engines(fleet)
+    unit_ids = sorted(fleet_df["unit_number"].unique())
 
     left, right = st.columns([2, 1], vertical_alignment="bottom")
     selected_unit = left.selectbox(
         "Pick one of the official test engines", unit_ids, index=0,
         format_func=lambda u: f"Engine {u}",
     )
-    engine_df = test_df[test_df.unit_number == selected_unit].sort_values("time_cycles")
+    engine_df = fleet_df[fleet_df.unit_number == selected_unit].sort_values("time_cycles")
     readings = engine_df[["time_cycles"] + raw_passthrough_cols].reset_index(drop=True)
     predict_clicked = right.button("Predict remaining life", type="primary",
                                    key="demo_predict", width="stretch")
@@ -605,9 +650,11 @@ with tab_demo:
                      "History sent to the model"), unsafe_allow_html=True)
     m2.markdown(card("Sensors used", f"{len(kept_sensors)}", "of 21",
                      "Near-constant sensors are dropped"), unsafe_allow_html=True)
-    m3.markdown(card("Subset", selected_subset, "", info.get("desc", "")), unsafe_allow_html=True)
+    m3.markdown(card("Model", selected_subset, "",
+                     info.get("desc", "") if fleet == selected_subset
+                     else f"scoring an {fleet} engine ({FLEETS[fleet]})"), unsafe_allow_html=True)
 
-    key = ("demo", selected_subset, int(selected_unit))
+    key = ("demo", selected_subset, fleet, int(selected_unit))
     if predict_clicked:
         try:
             with st.spinner("Scoring engine..."):
@@ -631,7 +678,7 @@ with tab_upload:
         f"`sensor_1`–`sensor_21`: one row per cycle, oldest first. It will be scored against "
         f"the **{selected_subset}** model selected in the sidebar."
     )
-    template = test_df[test_df.unit_number == unit_ids[0]][["time_cycles"] + raw_passthrough_cols]
+    template = test_df[test_df.unit_number == test_df.unit_number.min()][["time_cycles"] + raw_passthrough_cols]
     st.download_button(
         "Download an example CSV", template.to_csv(index=False).encode(),
         file_name=f"example_engine_{selected_subset.lower()}.csv", mime="text/csv",

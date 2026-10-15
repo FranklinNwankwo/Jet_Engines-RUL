@@ -40,7 +40,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from . import conformal, features, interval_calibration, manifest, models
+from . import conformal, drift, features, interval_calibration, manifest, models
 
 # Risk-band thresholds on the RSF point estimate, in cycles. These are an
 # illustrative default policy, not a value learned from data -- a real
@@ -80,6 +80,9 @@ class DeploymentBundle:
     # match it. Reported with every prediction.
     model_version: str = manifest.UNVERSIONED
     manifest: dict | None = None
+    # drift_reference.json (drift.py): used for the per-request input check
+    # and by the API's drift monitor. Optional; not part of the model version.
+    drift_reference: dict | None = None
 
     def __post_init__(self):
         if self.interval is None:
@@ -126,6 +129,7 @@ def load_deployment_bundle(models_dir: Path | str, verify_manifest: bool = True)
         interval=(interval_calibration.IntervalCalibration.from_dict(meta["interval"])
                   if "interval" in meta else None),
     )
+    bundle.drift_reference = drift.load_reference(models_dir)
     if verify_manifest:
         bundle_manifest = manifest.load_manifest(models_dir)
         bundle.model_version, _ = manifest.verified_version(models_dir, bundle_manifest)
@@ -266,6 +270,9 @@ def predict_with_features(bundle: DeploymentBundle, readings: pd.DataFrame) -> t
                         if bundle.interval.base == "hybrid" else bundle.interval.name,
         },
         "weibull_interval_90": [round(weibull_low, 1), round(weibull_high, 1)],
+        # Are this engine's inputs within what the model was trained on?
+        # (drift.familiarity; None if the bundle has no drift reference)
+        "input_check": drift.familiarity(bundle.drift_reference, feature_row),
         "rsf_calibrated_interval_supplementary": {
             "interval_90": [round(float(rsf_cal_low[0]), 1), round(float(rsf_cal_high[0]), 1)],
             "caveat": "Conformally calibrated for aggregate coverage, but unreliable for "

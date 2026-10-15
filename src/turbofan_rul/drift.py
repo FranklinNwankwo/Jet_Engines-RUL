@@ -54,6 +54,29 @@ and this is repeated over several random splits. The warning and drift
 thresholds are the 95th and 99th percentiles of the window maxima, never
 below 0.1 and 0.25. They are stored in the reference file.
 
+Per-engine input check (the "familiar inputs?" badge)
+-----------------------------------------------------
+PSI needs hundreds of requests, so a single engine is judged differently:
+how far each monitored input lies outside the range the model saw in
+training, over all training rows from cycle 30, failure included (the model
+was trained on full lives). For the operating settings, single raw readings
+that are pure measurement noise on FD001, the range is the full min-max seen
+in training; for the sensors' 15-cycle rolling means, already smooth, it is
+the 0.5th-99.5th percentile band. The distance is measured in units of that
+range, and the worst feature counts. Two kinds of
+evidence are kept apart, because they mean different things:
+
+- operating settings outside the range: conditions the model never saw ->
+  "unfamiliar", the prediction should not be trusted;
+- sensor readings outside the range: a fault or state the model rarely saw
+  -> "caution". This also happens in an engine's last few cycles, when
+  readings reach extremes few training engines had.
+
+Both thresholds are calibrated like the drift thresholds, on training
+engines only, from held-out engines' scores across every cycle: the 99.9th
+percentile for the strong "unfamiliar" verdict and the 99th for "caution",
+with a floor of 0.05 so harmless rounding in discrete settings never counts.
+
 What it does not do
 -------------------
 It detects changes in the *inputs*. It does not measure accuracy (true
@@ -89,6 +112,8 @@ WARNING_PSI = 0.10
 DRIFT_PSI = 0.25
 OP_SETTINGS = ("op_setting_1", "op_setting_2", "op_setting_3")
 FLOOR = 1e-4
+FAMILIARITY_TAILS = (0.005, 0.995)
+FAMILIARITY_FLOOR = 0.05
 
 
 def monitored_columns(bundle) -> list[str]:
@@ -207,6 +232,104 @@ def calibrate_thresholds(featured: pd.DataFrame, train_raw: pd.DataFrame, column
     }
 
 
+def _range_scores(rows: pd.DataFrame, low: dict, high: dict) -> pd.DataFrame:
+    """Per-feature distance outside [low, high], in units of the range width."""
+    cols = list(low)
+    lo, hi = pd.Series(low)[cols], pd.Series(high)[cols]
+    span = (hi - lo).where(hi > lo, 1e-9)
+    x = rows[cols].astype(float)
+    return np.maximum(np.maximum(x - hi, lo - x), 0) / span
+
+
+def _familiar_range(rows: pd.DataFrame, columns: list[str]) -> tuple[dict, dict]:
+    """[low, high] per feature: full min-max for operating settings, the
+    FAMILIARITY_TAILS percentile band for sensor features."""
+    low, high = {}, {}
+    for c in columns:
+        q = (0.0, 1.0) if c in OP_SETTINGS else FAMILIARITY_TAILS
+        low[c], high[c] = float(rows[c].quantile(q[0])), float(rows[c].quantile(q[1]))
+    return low, high
+
+
+def calibrate_familiarity(featured: pd.DataFrame, columns: list[str], n_splits: int = 5,
+                          min_cycle: int = 30, random_state: int = 0) -> dict:
+    """Ranges from all training rows, and thresholds from held-out training
+    engines (see module docstring)."""
+    rows = featured[featured.time_cycles >= min_cycle]
+    rows = rows.assign(_rul=rows.groupby("unit_number").time_cycles.transform("max") - rows.time_cycles)
+    ops = [c for c in columns if c in OP_SETTINGS]
+    sensors = [c for c in columns if c not in OP_SETTINGS]
+    units = np.sort(rows.unit_number.unique())
+    rng = np.random.default_rng(random_state)
+    held_scores = []
+    for _ in range(n_splits):
+        shuffled = rng.permutation(units)
+        ref, held = rows[rows.unit_number.isin(shuffled[: len(units) // 2])], \
+            rows[rows.unit_number.isin(shuffled[len(units) // 2:])]
+        low, high = _familiar_range(ref, columns)
+        d = _range_scores(held, low, high)
+        held_scores.append(pd.DataFrame({"operating": d[ops].max(axis=1).values,
+                                         "sensors": d[sensors].max(axis=1).values,
+                                         "rul": held._rul.values}))
+    held_scores = pd.concat(held_scores)
+    # The red "unfamiliar" verdict is strong, so it targets 0.1% false alarms
+    # on held-out training engines; the amber "caution" targets 1%.
+    quantiles = {"operating": 0.999, "sensors": 0.99}
+    thresholds = {k: round(max(FAMILIARITY_FLOOR, float(np.quantile(held_scores[k], q))), 4)
+                  for k, q in quantiles.items()}
+    bands = pd.cut(held_scores.rul, [-1, 10, 25, 50, np.inf], labels=["<=10", "11-25", "26-50", ">50"])
+    flag_rates = {k: {str(b): round(float((g[k] > thresholds[k]).mean()), 4)
+                      for b, g in held_scores.groupby(bands, observed=True)} for k in thresholds}
+    low, high = _familiar_range(rows, columns)
+    return {
+        "low": low,
+        "high": high,
+        "operating_columns": ops,
+        "sensor_columns": sensors,
+        "thresholds": thresholds,
+        "calibration": {"method": "half-split of training engines, every cycle >= %d" % min_cycle,
+                        "quantiles": quantiles,
+                        "n_splits": n_splits, "held_out_flag_rate_by_remaining_life": flag_rates},
+    }
+
+
+def familiarity(reference: dict | None, feature_row) -> dict | None:
+    """Per-engine input check for one feature row (see module docstring).
+    Returns None for references written before the check existed."""
+    fam = (reference or {}).get("familiarity")
+    if fam is None:
+        return None
+    row = feature_row if isinstance(feature_row, pd.DataFrame) else feature_row.to_frame().T
+    d = _range_scores(row, fam["low"], fam["high"]).iloc[0]
+    op_score = float(d[fam["operating_columns"]].max())
+    sensor_score = float(d[fam["sensor_columns"]].max())
+    t = fam["thresholds"]
+    if op_score > t["operating"]:
+        status = "unfamiliar"
+        message = ("Operating settings outside anything the model was trained on. "
+                   "The prediction should not be trusted for this engine.")
+    elif sensor_score > t["sensors"]:
+        status = "caution"
+        message = ("Some sensor readings are outside the range seen in training. This happens in an "
+                   "engine's last few cycles; if the predicted life isn't low, treat the prediction with caution.")
+    else:
+        status = "familiar"
+        message = "All inputs are within the range the model was trained on."
+    outside = d[d > 0].sort_values(ascending=False).head(5)
+    return {
+        "status": status,
+        "message": message,
+        "operating_score": round(op_score, 4),
+        "sensor_score": round(sensor_score, 4),
+        "thresholds": t,
+        "outside_training_range": [
+            {"feature": f, "value": round(float(row[f].iloc[0]), 4),
+             "training_range": [round(fam["low"][f], 4), round(fam["high"][f], 4)]}
+            for f in outside.index if outside[f] > 0
+        ],
+    }
+
+
 def build_reference(bundle, train_raw: pd.DataFrame, n_draws: int = 5, every: int = 10,
                     min_cycle: int = 30, random_state: int = 100) -> dict:
     """Reference distribution of the monitored inputs on fleet-like snapshots
@@ -228,6 +351,7 @@ def build_reference(bundle, train_raw: pd.DataFrame, n_draws: int = 5, every: in
                          "truncation_fraction": [0.3, 0.99], "random_state": random_state},
         "thresholds": thresholds,
         "features": features_ref,
+        "familiarity": calibrate_familiarity(featured, columns, min_cycle=min_cycle),
     }
 
 
@@ -320,9 +444,11 @@ def main(argv: list[str] | None = None) -> None:
         train = data_loading.load_subset(subset, data_dir=args.data_dir).train
         ref = write_reference(bundle, train, subset_dir)
         t = ref["thresholds"]
+        ft = ref["familiarity"]["thresholds"]
         print(f"{subset}: drift reference with {len(ref['features'])} features from "
               f"{ref['n_reference_rows']} fleet-like training snapshots; calibrated thresholds "
-              f"warning {t['warning']}, drift {t['drift']} -> {subset_dir / REFERENCE_NAME}")
+              f"warning {t['warning']}, drift {t['drift']}; input check: operating {ft['operating']}, "
+              f"sensors {ft['sensors']} -> {subset_dir / REFERENCE_NAME}")
 
 
 if __name__ == "__main__":
