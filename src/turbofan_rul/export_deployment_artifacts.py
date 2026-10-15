@@ -66,7 +66,7 @@ from lifelines import WeibullAFTFitter
 from sklearn.model_selection import GroupKFold
 from sklearn.preprocessing import StandardScaler
 
-from . import conformal, cross_validation, data_loading, features, interval_calibration, labeling, manifest, models
+from . import conformal, cross_validation, data_loading, drift, features, interval_calibration, inference, labeling, manifest, models
 
 logger = logging.getLogger(__name__)
 
@@ -270,6 +270,12 @@ def build_and_save(subset: str, data_dir: Path, processed_dir: Path, models_dir:
     # provenance, library versions, and test-set metrics measured through
     # the serving path. Scoring the official test set adds ~30s (FD001) to
     # ~90s (FD004).
+    # Drift reference (drift.py): distribution of the monitored inputs on
+    # fleet-like snapshots of the training engines. Not part of the model
+    # version -- it doesn't change predictions -- but published with it.
+    drift.write_reference(inference.load_deployment_bundle(subset_models_dir, verify_manifest=False),
+                          cmapss.train, subset_models_dir)
+
     logger.info("Writing manifest (scores the official test set through inference.predict)...")
     written = manifest.write_manifest(subset, models_dir, data_dir)
     logger.info("Saved artifacts for %s to %s -- model version %s", subset, subset_models_dir,

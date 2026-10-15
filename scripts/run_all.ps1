@@ -28,11 +28,12 @@ if ($pyver -ne "3.11") {
     Write-Host "Python $pyver is active; the project (and the pinned live-demo models) use 3.11." -ForegroundColor Red
     exit 1
 }
-foreach ($f in "models\fd001\rsf.joblib", "models\fd004\rsf.joblib") {
+foreach ($f in "models\fd001\rsf.joblib", "models\fd004\rsf.joblib", "models\fd001\drift_reference.json", "models\fd004\drift_reference.json") {
     if (-not (Test-Path $f)) {
         Write-Host "$f is missing. Export it first:" -ForegroundColor Red
         Write-Host "  python -m turbofan_rul.export_deployment_artifacts --subset FD001"
         Write-Host "  python -m turbofan_rul.export_deployment_artifacts --subset FD004"
+        Write-Host "(or, for models exported earlier, just: python -m turbofan_rul.drift --subset FD001 --subset FD004)"
         exit 1
     }
 }
@@ -112,7 +113,8 @@ $checks = @(
     @{ File = "notebooks\15_interval_fix.ipynb";            Text = "Confirmation rule: PASSED" },
     @{ File = "notebooks\16_uncapped_upper_bound.ipynb";    Text = "better on C-index and RMSE on both subsets: False" },
     @{ File = "notebooks\16_uncapped_upper_bound.ipynb";    Text = "Selected within the 250 MB budget: uncapped RSF upper (leaf 30)" },
-    @{ File = "notebooks\16_uncapped_upper_bound.ipynb";    Text = "Confirmation on the test sets: PASSED" }
+    @{ File = "notebooks\16_uncapped_upper_bound.ipynb";    Text = "Confirmation on the test sets: PASSED" },
+    @{ File = "notebooks\17_drift_monitoring.ipynb";         Text = "Own fleets: no drift windows" }
 )
 $ok = $true
 foreach ($c in $checks) {

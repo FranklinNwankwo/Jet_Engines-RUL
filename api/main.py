@@ -34,7 +34,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 
-from turbofan_rul import inference
+from turbofan_rul import drift, inference
 
 MODELS_DIR = Path(__file__).parent.parent / "models"
 AVAILABLE_SUBSETS = ["FD001", "FD004"]
@@ -68,6 +68,13 @@ async def lifespan(app: FastAPI):
             "`python -m turbofan_rul.export_deployment_artifacts --subset FD001` first."
         )
     _state["bundles"] = bundles
+    # One drift monitor per subset that has a reference (drift.py). The
+    # window is in memory, so it starts empty after every restart.
+    _state["monitors"] = {
+        subset: drift.DriftMonitor(ref)
+        for subset in bundles
+        if (ref := drift.load_reference(MODELS_DIR / subset.lower())) is not None
+    }
     yield
     _state.clear()
 
@@ -217,9 +224,29 @@ def predict(request: PredictRequest) -> dict:
         )
     readings_df = pd.DataFrame([r.model_dump() for r in request.readings])
     try:
-        return inference.predict(bundles[request.subset], readings_df)
+        result, feature_row = inference.predict_with_features(bundles[request.subset], readings_df)
     except inference.InvalidReadingsError as e:
         # Maps a caller mistake (bad input shape) to 422, distinct from an
         # unexpected 500 -- the InvalidReadingsError/ValueError split in
         # inference.py exists specifically so this distinction is possible.
         raise HTTPException(status_code=422, detail=str(e))
+    monitor = _state.get("monitors", {}).get(request.subset)
+    if monitor is not None:
+        monitor.update(feature_row)
+    return result
+
+
+@app.get("/drift")
+def drift_report() -> dict:
+    """Input drift per subset: recent requests vs. the training reference
+    (Population Stability Index, see drift.py). "insufficient data" until
+    enough requests have arrived to judge."""
+    bundles = _state.get("bundles", {})
+    monitors = _state.get("monitors", {})
+    return {
+        subset: ({"model_version": bundles[subset].model_version, **monitors[subset].report()}
+                 if subset in monitors else {"status": "no reference",
+                                             "detail": "run `python -m turbofan_rul.drift --subset "
+                                                       f"{subset}` to create one"})
+        for subset in bundles
+    }

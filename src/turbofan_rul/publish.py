@@ -33,7 +33,7 @@ from pathlib import Path
 
 from . import manifest
 
-SMALL_FILES = ("deployment_metadata.json", manifest.MANIFEST_NAME)
+SMALL_FILES = ("deployment_metadata.json", manifest.MANIFEST_NAME, "drift_reference.json")
 
 
 @dataclass

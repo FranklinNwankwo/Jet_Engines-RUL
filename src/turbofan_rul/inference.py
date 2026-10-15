@@ -159,8 +159,29 @@ def _validate_readings(readings: pd.DataFrame, bundle: DeploymentBundle) -> None
         raise InvalidReadingsError("readings must be sorted by ascending time_cycles")
 
 
+def featurize(bundle: DeploymentBundle, readings: pd.DataFrame) -> pd.DataFrame:
+    """Engineered features for one or more engines (needs `unit_number`),
+    preprocessed exactly as the bundle's models expect: regime-normalized
+    first for multi-regime subsets. Used by `predict` for a single request
+    and by drift monitoring for whole fleets."""
+    working = readings
+    if bundle.uses_regime_clustering:
+        regime_labels = features.assign_regime_clusters(working, bundle.regime_kmeans)
+        working = features.apply_regime_normalization(
+            working, SENSOR_COLS, regime_labels, bundle.regime_norm_stats
+        )
+    return features.build_feature_matrix(working, kept_sensors=bundle.kept_sensors)
+
+
 def predict(bundle: DeploymentBundle, readings: pd.DataFrame) -> dict:
-    """Score one engine's recent sensor history.
+    """Score one engine's recent sensor history; see `predict_with_features`."""
+    return predict_with_features(bundle, readings)[0]
+
+
+def predict_with_features(bundle: DeploymentBundle, readings: pd.DataFrame) -> tuple[dict, pd.DataFrame]:
+    """Score one engine's recent sensor history. Returns (response dict, the
+    one-row feature frame the models scored) -- the API passes the feature
+    row to drift monitoring (`drift.py`).
 
     `readings` is a dataframe with `time_cycles` plus every column in
     `bundle.raw_passthrough_cols` (all 21 raw sensors + 3 operating
@@ -181,13 +202,7 @@ def predict(bundle: DeploymentBundle, readings: pd.DataFrame) -> dict:
     working = readings.reset_index(drop=True)
     working["unit_number"] = 1  # single synthetic engine id for this request
 
-    if bundle.uses_regime_clustering:
-        regime_labels = features.assign_regime_clusters(working, bundle.regime_kmeans)
-        working = features.apply_regime_normalization(
-            working, SENSOR_COLS, regime_labels, bundle.regime_norm_stats
-        )
-
-    feature_row = features.build_feature_matrix(working, kept_sensors=bundle.kept_sensors).iloc[[-1]]
+    feature_row = featurize(bundle, working).iloc[[-1]]
 
     # --- RSF: point estimate + risk ranking ---
     rsf_out = models.predict_rul_from_survival(bundle.rsf_model, feature_row[bundle.full_feature_cols])
@@ -237,7 +252,7 @@ def predict(bundle: DeploymentBundle, readings: pd.DataFrame) -> dict:
     # it. Surfaced explicitly rather than left for a viewer to notice unaided.
     point_outside_interval = not (ci_low_out <= predicted_rul_out <= ci_high_out)
 
-    return {
+    result = {
         "subset": bundle.subset,
         "model_version": bundle.model_version,
         "predicted_rul_cycles": predicted_rul_out,
@@ -258,3 +273,4 @@ def predict(bundle: DeploymentBundle, readings: pd.DataFrame) -> dict:
                       "Informational only; confidence_interval_90 is authoritative.",
         },
     }
+    return result, feature_row

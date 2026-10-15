@@ -56,6 +56,11 @@ def api_mode():
               f"{subset} prediction {r['predicted_rul_cycles']:.1f} cycles within [{lo}, {hi}]")
         check(0 <= low < high, f"{subset} interval [{low:.1f}, {high:.1f}] is ordered")
 
+    report = requests.get(f"{base}/drift", timeout=30).json()
+    check(all(report.get(s, {}).get("requests_seen", 0) >= 1 for s in CHECKS),
+          f"/drift monitors both subsets and saw the requests: "
+          f"{ {s: report.get(s, {}).get('status') for s in CHECKS} }")
+
     bad = requests.post(f"{base}/predict", json={"subset": "FD001", "readings": []}, timeout=30)
     check(bad.status_code == 422, f"empty readings rejected with 422 (got {bad.status_code})")
 
