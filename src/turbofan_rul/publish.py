@@ -14,7 +14,7 @@ What it does
    byte-identical, only the small JSON files (`deployment_metadata.json`,
    `manifest.json`) are uploaded: a few kilobytes instead of ~350 MB. When a
    model file differs, it stops and asks for `--full`, so a large upload
-   never happens by accident.
+   never happens by accident; `--full` then uploads only the files that differ.
 3. Uploads everything in a single commit and tags that commit with each
    subset's `model_version` (e.g. `fd001-ec87c2b68240`). Setting the live
    demo's `MODEL_REVISION` to that tag pins it to exactly these models.
@@ -78,7 +78,8 @@ def plan_subset(api, repo_id: str, subset: str, models_dir: Path, full: bool) ->
     plan = SubsetPlan(subset, version, changed_models=[n for n in large if remote.get(n) != local[n]])
     if plan.changed_models and not full:
         return plan
-    names = list(SMALL_FILES) + (large if full else [])
+    # Only the model files that actually differ are uploaded, never the unchanged ones.
+    names = list(SMALL_FILES) + (plan.changed_models if full else [])
     for name in names:
         path = subset_dir / name
         if path.exists():
@@ -129,7 +130,7 @@ def main(argv: list[str] | None = None) -> None:
                         help="Hugging Face model repo, e.g. user/turbofan-rul-models (default: $MODEL_REPO)")
     parser.add_argument("--subset", action="append", help="FD001 / FD004 (default: both)")
     parser.add_argument("--models-dir", default="models")
-    parser.add_argument("--full", action="store_true", help="also upload the large model files")
+    parser.add_argument("--full", action="store_true", help="also upload the model files that differ from Hugging Face")
     parser.add_argument("--dry-run", action="store_true", help="show what would be uploaded, upload nothing")
     args = parser.parse_args(argv)
     if not args.repo:

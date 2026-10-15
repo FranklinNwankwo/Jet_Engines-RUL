@@ -91,3 +91,14 @@ def test_dry_run_uploads_nothing(tmp_path):
     api = FakeApi({"fd001": _remote_same_as(d)})
     publish.publish(api, "u/repo", ["FD001"], tmp_path, dry_run=True)
     assert api.commits == [] and api.tags == []
+
+
+def test_full_uploads_only_the_model_files_that_differ(tmp_path):
+    """A refit Weibull (lifelines stamps the fit time into the pickle) must
+    not drag the unchanged 226 MB forest into the upload."""
+    d = _bundle(tmp_path)
+    remote = _remote_same_as(d); remote["weibull_aft.joblib"] = "0" * 64
+    api = FakeApi({"fd001": remote})
+    publish.publish(api, "u/repo", ["FD001"], tmp_path, full=True)
+    assert sorted(api.commits[0]) == ["fd001/deployment_metadata.json", "fd001/manifest.json",
+                                      "fd001/weibull_aft.joblib"]
