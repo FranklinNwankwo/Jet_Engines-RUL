@@ -1,0 +1,61 @@
+{
+  "schema_version": 1,
+  "model_version": "fd004-cc699bc23a56",
+  "subset": "FD004",
+  "created_at": "2026-10-15T13:33:28Z",
+  "artifacts": {
+    "deployment_metadata.json": "f1e7ae3d978cfa36512a4abf49584062307736902df0ec620f2fcdd3ed8ab872",
+    "rsf.joblib": "7259bce00f817088a4b5c588c9c9977552cb48103ec57028981c8961711ef837",
+    "weibull_aft.joblib": "a26e82c67aa2011ac151332f684692e8a6161ccc58824f64a38951af42f650b5",
+    "weibull_scaler.joblib": "846d067c37ce4222dd1d1667ee8b49d32df76e7c48e050c5e0657bafed3382e3",
+    "regime_kmeans.joblib": "5a02eef0d8947b26cd1389bf29e7c609b53c94fdf77ad82032ec2809ef080042",
+    "regime_norm_stats.joblib": "2475e32d19d8e7e10d23b93b8f8ce1f22ecb4885cdac6cf8755ebbcdb6f65a7d"
+  },
+  "training_data": {
+    "train_FD004.txt": "27ef6160b6a1dcb2613a88de9c239f763b223f02cdc41dc5cdedc5dc189b6218",
+    "test_FD004.txt": "1dc675fff0624bac10786927c6715b37d1297657137400d2b1a3138d777a3ba5",
+    "RUL_FD004.txt": "196b836b85a95ac7fdbbf29c5fdf1657382eafa445644d114ffaaf50dc2975e1"
+  },
+  "code": {
+    "commit": "1c7eea06d06129a6c00d8f46f18e14620c4d21b0",
+    "uncommitted_changes": false
+  },
+  "environment": {
+    "python": "3.11.9",
+    "platform": "Windows-10",
+    "packages": {
+      "numpy": "2.4.6",
+      "pandas": "2.3.3",
+      "scipy": "1.17.1",
+      "scikit-learn": "1.9.1",
+      "scikit-survival": "0.28.0",
+      "lifelines": "0.30.3",
+      "joblib": "1.6.0"
+    }
+  },
+  "training_config": {
+    "cap": 125,
+    "rsf_min_samples_leaf": 5,
+    "rsf_row_stride": 15,
+    "uses_regime_clustering": true,
+    "rsf_interval_correction": 35.998999999999995,
+    "interval": {
+      "base": "hybrid",
+      "mode": "none",
+      "note": "inference default"
+    }
+  },
+  "test_metrics": {
+    "n_engines": 248,
+    "c_index": 0.8619,
+    "nasa_score_per_engine": 22.413,
+    "rmse": 28.206,
+    "mae": 20.655,
+    "late_rate": 0.4839,
+    "interval_coverage": 0.8871,
+    "interval_coverage_near_failure": 0.94,
+    "interval_coverage_above_cap": 0.7313,
+    "interval_mean_width": 100.05,
+    "dangerous_misses": 3
+  }
+}

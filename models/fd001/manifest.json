@@ -1,0 +1,70 @@
+{
+  "schema_version": 1,
+  "model_version": "fd001-3328802d81b0",
+  "subset": "FD001",
+  "created_at": "2026-10-15T13:31:19Z",
+  "artifacts": {
+    "deployment_metadata.json": "b4ed3e0560b7465456a4f006568c472f76472866bc4071dfaa124d04e1586922",
+    "rsf.joblib": "989b38d0e538fd576c2460a327ca9eda458f408fd2f1964c270b8181d1199849",
+    "weibull_aft.joblib": "c9240296c4067be7cb058adcb679dd498bfd3bb03354637caf13db11fd0ffea6",
+    "weibull_scaler.joblib": "06a023bd463d1c8271e25449fa602a8d5fc3940c871253d5fc09ac7d2ecb825b"
+  },
+  "training_data": {
+    "train_FD001.txt": "963b5e22825b34d8b21c69e1aeb4af3e647050eb672ee8834ba4b5d91d2de0f8",
+    "test_FD001.txt": "3cda7109ce17bafb5443f2ac926cfcf88154b941b8c4cf95eb55d1ddd6f52851",
+    "RUL_FD001.txt": "a19c8ec94931949d0485bdc35118206e9c81c4547b422efb9cf86f4ceddbceca"
+  },
+  "code": {
+    "commit": "1c7eea06d06129a6c00d8f46f18e14620c4d21b0",
+    "uncommitted_changes": false
+  },
+  "environment": {
+    "python": "3.11.9",
+    "platform": "Windows-10",
+    "packages": {
+      "numpy": "2.4.6",
+      "pandas": "2.3.3",
+      "scipy": "1.17.1",
+      "scikit-learn": "1.9.1",
+      "scikit-survival": "0.28.0",
+      "lifelines": "0.30.3",
+      "joblib": "1.6.0"
+    }
+  },
+  "training_config": {
+    "cap": 125,
+    "rsf_min_samples_leaf": 5,
+    "rsf_row_stride": 3,
+    "uses_regime_clustering": false,
+    "rsf_interval_correction": 4.998999999999995,
+    "interval": {
+      "base": "hybrid",
+      "mode": "none",
+      "alpha": 0.1,
+      "corrections": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "pred_bands": [
+        0.0,
+        40.0,
+        90.0,
+        null
+      ]
+    }
+  },
+  "test_metrics": {
+    "n_engines": 100,
+    "c_index": 0.864,
+    "nasa_score_per_engine": 4.049,
+    "rmse": 15.557,
+    "mae": 11.332,
+    "late_rate": 0.56,
+    "interval_coverage": 0.97,
+    "interval_coverage_near_failure": 1.0,
+    "interval_coverage_above_cap": 0.9091,
+    "interval_mean_width": 99.68,
+    "dangerous_misses": 0
+  }
+}
