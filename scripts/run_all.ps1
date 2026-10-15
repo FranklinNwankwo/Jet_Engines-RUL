@@ -41,11 +41,15 @@ $total = [Diagnostics.Stopwatch]::StartNew()
 
 # --- notebooks ---------------------------------------------------------------
 if (-not $SkipNotebooks) {
-    # Notebook 15 loads its out-of-fold predictions from these files when they
-    # exist. Deleting them makes it recompute them from scratch (~12 minutes),
-    # so the selection is reproduced on this machine, not just re-read.
+    # Notebooks 15 and 16 load their out-of-fold predictions from these files
+    # when they exist. Deleting them makes the notebooks recompute them from
+    # scratch (~15 and ~40 minutes), so the selections are reproduced on this
+    # machine, not just re-read.
     if ($StartAt -le 15) {
         Remove-Item data\processed\interval_oof_fd001.csv, data\processed\interval_oof_fd004.csv -ErrorAction SilentlyContinue
+    }
+    if ($StartAt -le 16) {
+        Remove-Item data\processed\interval_oof_uncapped_*.csv -ErrorAction SilentlyContinue
     }
 
     # -Filter doesn't support [0-9] ranges, so match the "NN_" prefix with a regex.
@@ -101,7 +105,10 @@ if ($LASTEXITCODE -ne 0) {
 $checks = @(
     @{ File = "notebooks\14_interval_coverage_check.ipynb"; Text = "FD001 reproduces notebook 12" },
     @{ File = "notebooks\15_interval_fix.ipynb";            Text = "Selected by the rule: hybrid+none" },
-    @{ File = "notebooks\15_interval_fix.ipynb";            Text = "Confirmation rule: PASSED" }
+    @{ File = "notebooks\15_interval_fix.ipynb";            Text = "Confirmation rule: PASSED" },
+    @{ File = "notebooks\16_uncapped_upper_bound.ipynb";    Text = "better on C-index and RMSE on both subsets: False" },
+    @{ File = "notebooks\16_uncapped_upper_bound.ipynb";    Text = "Selected within the 250 MB budget: uncapped RSF upper (leaf 30)" },
+    @{ File = "notebooks\16_uncapped_upper_bound.ipynb";    Text = "Confirmation on the test sets: PASSED" }
 )
 $ok = $true
 foreach ($c in $checks) {

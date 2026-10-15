@@ -29,7 +29,8 @@ This is the "how did we get here" document; every phase, what triggered it, what
 23. [Phase 22: continuous integration](#23-phase-22-continuous-integration)
 24. [Phase 23: Docker, finally built](#24-phase-23-docker-finally-built)
 25. [Phase 24: the deployed interval, checked at the other end](#25-phase-24-the-deployed-interval-checked-at-the-other-end)
-26. [Where things stand](#26-where-things-stand)
+26. [Phase 25: training without the cap, measured and not deployed](#26-phase-25-training-without-the-cap-measured-and-not-deployed)
+27. [Where things stand](#27-where-things-stand)
 
 ---
 
@@ -328,11 +329,23 @@ Running the checks inside the containers, rather than from the runner, is what t
 
 ---
 
-## 26. Where things stand
+## 26. Phase 25: training without the cap, measured and not deployed
 
-**Done, verified with real execution:** the full survival-analysis framing and censoring argument; the complete model ladder (Cox → Weibull → RSF → two deep-learning architectures), each addition justified by the previous model's diagnostics; domain-appropriate evaluation (NASA score primary, RMSE secondary); 5-fold cross-validation confirming the ranking isn't a single-split artifact; generalization checks across three additional dataset subsets; hyperparameter tuning validated against both CV and the real official test set; a conformal-prediction fix for RSF's interval coverage, validated by subgroup rather than trusted in aggregate; the Phase 8/9 feature-scope leak, measured rather than left as a documented assumption; a properly separated two-service HTTP architecture, fresh-clone verified end to end (install → export → serve → test, from nothing); a full correctness review (Phase 18) with every notebook re-run; the survival framing tested under simulated censoring, with a mixed result reported as measured (Phase 20); a short README with results first and a full technical report (Phase 21); a redesigned dashboard live at [https://jetengines-rul.streamlit.app/](https://jetengines-rul.streamlit.app/) (Phase 19); 163 tests across 12 files run by GitHub Actions (Phase 22); both Docker images built and smoke-tested in CI (Phase 23); the deployed interval checked by subgroup at both ends of the remaining-life range, with a near-failure fix selected on training data (Phase 24); and a README, project brief and architecture walkthrough that match the actual current state rather than the original plan.
+**What prompted it:** after Phase 24, FD004's interval still covered only 73% of engines with more than 125 cycles left. Every model learns remaining life clipped at 125, so no upper bound can reach far past it.
+
+**What was built:** `notebooks/16_uncapped_upper_bound.ipynb` reruns Phase 24's out-of-fold protocol with the cap removed, as two pre-stated questions. Point estimate: does uncapped RSF beat capped RSF on C-index and RMSE on both subsets? No (FD001 RMSE 24.4 → 28.0), so the cap stays. Upper bound: keeping Phase 24's lower bound, does an uncapped upper bound clear 85% in every band? Only the uncapped RSF does; an uncapped Weibull just misses on FD001 (84%).
+
+**A size constraint surfaced:** uncapped leaf-5 forests are about 3× the deployed ones (1.2 GB for both subsets), so a leaf-30 version (about 200 MB, the project's original RSF setting) was added before its results were known. It passed on training data and on the test sets: above-cap coverage 91% → 100% (FD001) and 73% → 100% (FD004), intervals 27 and 60 cycles wider, almost all of it on engines predicted healthy.
+
+**Decision: recorded, not deployed.** The misses it fixes are on the safe side, the upper bound barely drives maintenance decisions, the interval would over-cover (98–99% vs 90%), and it costs a second forest per subset. Stated in the notebook with what would change the decision. `run_all.ps1` checks all three results.
+
+---
+
+## 27. Where things stand
+
+**Done, verified with real execution:** the full survival-analysis framing and censoring argument; the complete model ladder (Cox → Weibull → RSF → two deep-learning architectures), each addition justified by the previous model's diagnostics; domain-appropriate evaluation (NASA score primary, RMSE secondary); 5-fold cross-validation confirming the ranking isn't a single-split artifact; generalization checks across three additional dataset subsets; hyperparameter tuning validated against both CV and the real official test set; a conformal-prediction fix for RSF's interval coverage, validated by subgroup rather than trusted in aggregate; the Phase 8/9 feature-scope leak, measured rather than left as a documented assumption; a properly separated two-service HTTP architecture, fresh-clone verified end to end (install → export → serve → test, from nothing); a full correctness review (Phase 18) with every notebook re-run; the survival framing tested under simulated censoring, with a mixed result reported as measured (Phase 20); a short README with results first and a full technical report (Phase 21); a redesigned dashboard live at [https://jetengines-rul.streamlit.app/](https://jetengines-rul.streamlit.app/) (Phase 19); 163 tests across 12 files run by GitHub Actions (Phase 22); both Docker images built and smoke-tested in CI (Phase 23); the deployed interval checked by subgroup at both ends of the remaining-life range, with a near-failure fix selected on training data (Phase 24); training without the cap measured for both the point estimate and the upper bound, and declined on cost-benefit grounds (Phase 25); and a README, project brief and architecture walkthrough that match the actual current state rather than the original plan.
 
 **Genuinely outstanding — everything left, and nothing more:**
 
 - The public demo runs in one process (embedded mode), not as the two-service deployment — a free-hosting constraint (Phase 19). Its models must be re-uploaded to the Hugging Face repo after every re-export, with `app/requirements.txt`'s pins kept in step.
-- FD004 reuses FD001's hyperparameters by design (a transfer test). Its interval covers 73% of test engines above the 125-cycle cap — safe-side misses that calibration can't fix; a model trained without the cap would be the next step.
+- FD004 reuses FD001's hyperparameters by design (a transfer test). Its interval covers 73% of test engines above the 125-cycle cap — safe-side misses. An uncapped upper bound fixes them (Phase 25) and is ready to deploy if a use ever needs it.

@@ -124,6 +124,8 @@ RMSE alone is treated as insufficient and explicitly secondary. The evaluation s
 
 9. **Deployed-interval check and near-failure fix** (`notebooks/14_interval_coverage_check.ipynb`, `notebooks/15_interval_fix.ipynb`, `src/turbofan_rul/interval_calibration.py`). Scoring every test engine through the deployed `inference.predict` closed the FD004 calibration gap (calibrated RSF 87.9%, 55% above the cap) and found that the deployed Weibull interval covered only 58% (FD001) and 54% (FD004) of engines within 25 cycles of failure, every miss promising more life than the engine had. A replacement was selected on out-of-fold training data (each engine scored at 10 points across its life; six candidates; a fixed coverage-then-width rule): lower bound = the more cautious of RSF's and Weibull's, upper bound = Weibull's. Confirmed on the test sets: near-failure coverage 100% (FD001) and 94% (FD004), overall 97.0% and 88.7%, about one cycle wider. Now the deployed interval; no model was retrained.
 
+10. **Training without the 125-cycle cap** (`notebooks/16_uncapped_upper_bound.ipynb`). Same out-of-fold protocol, with the cap removed. The point estimate gets worse (FD001 RMSE 24.4 → 28.0, C-index 0.864 → 0.852), so the cap stays. An upper bound from an uncapped RSF (leaf 30, about 200 MB) lifts above-cap test coverage from 91% to 100% (FD001) and from 73% to 100% (FD004), with intervals 27 and 60 cycles wider on average. Recorded, not deployed: those misses are on the safe side, the interval would over-cover (98–99%), and it would add a second forest per subset.
+
 All models are compared in comparison tables across every axis above; the deployment model selection is justified against those tables, not a single number.
 
 ---
@@ -164,7 +166,8 @@ turbofan-rul/
 │   ├── 12_rsf_interval_calibration.ipynb       # added: conformal calibration fix
 │   ├── 13_censoring_experiment.ipynb           # added: survival vs. regression under simulated censoring
 │   ├── 14_interval_coverage_check.ipynb        # added: deployed intervals by subgroup (FD001 + FD004)
-│   └── 15_interval_fix.ipynb                   # added: near-failure fix, selected on training data
+│   ├── 15_interval_fix.ipynb                   # added: near-failure fix, selected on training data
+│   └── 16_uncapped_upper_bound.ipynb           # added: training without the cap — measured, not deployed
 ├── src/turbofan_rul/
 │   ├── data_loading.py                 # all 4 subsets, not just FD001
 │   ├── features.py                     # rolling stats, trends, health index, regime clustering
@@ -224,7 +227,7 @@ Notebooks are used for exploration, derivation, and reporting. Any logic the API
 ## 10. Known Gaps
 
 - **FD004 reuses FD001's tuned hyperparameters by design** — it tests whether the FD001 recipe transfers without re-tuning.
-- **FD004's interval under-covers long-lived engines.** 73% of FD004 test engines with more than 125 cycles left are covered (target 90%). The misses are on the safe side (the engine outlives the interval), and no calibration candidate in notebook 15 fixed them, because they share Weibull's upper bound; a model trained without the 125-cycle cap would be the next step.
+- **FD004's interval under-covers long-lived engines.** 73% of FD004 test engines with more than 125 cycles left are covered (target 90%). The misses are on the safe side (the engine outlives the interval), and no calibration candidate in notebook 15 fixed them, because they share Weibull's upper bound. An upper bound from an RSF trained without the cap does fix them (100% on the test set), but was deliberately not deployed — see Section 6, item 10.
 - **Training labels keep `event=1` at the 125-cycle cap.** The censored alternative was tested and rejected because it breaks the deployed Weibull interval (Section 4); the labels are therefore a convention, not an exact description of those rows.
 - **A cross-validation bug was found and fixed late.** `features.add_ewm_features` used `groupby().apply` plus `reset_index`, which misaligned EWM features on any frame whose row index wasn't 0..n-1 — every CV fold, though not the full training frame or the deployed model. It affected only RSF's CV and tuning numbers (Cox/Weibull use no EWM features); all affected notebooks were re-run after the fix, and the main change was that the leaf=5 tuning result went from looking like a 4-of-5-fold winner to 2 of 5.
 - **A fresh-clone smoke test was performed and caught two real bugs.** A tracked-files-only export of this repo into an isolated directory with a fresh virtual environment surfaced that both `api/main.py`'s startup check and `test_inference.py`'s skip condition were checking for a *tracked* file (`deployment_metadata.json`) as a proxy for whether a model was built, when the actual model file (`rsf.joblib`) is gitignored — invisible in a long-lived development environment where the model always existed once built, but a crash-on-missing-model bug on a genuinely fresh clone. Fixed in both places; re-verified with a full fresh install → model export → live API prediction → test run, all producing results identical to the main development environment. This closes the "does it work outside one long-lived sandbox" question for the Python pipeline specifically; the Docker layer is now verified separately, by the Docker CI job (Section 7).

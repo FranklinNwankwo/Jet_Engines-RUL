@@ -113,7 +113,7 @@ MODELS_DIR=models streamlit run app/streamlit_app.py
 docker compose up --build
 ```
 
-The notebooks in `notebooks/` run in order, `01_eda` through `15_interval_fix`.
+The notebooks in `notebooks/` run in order, `01_eda` through `16_uncapped_upper_bound`.
 
 **CI.** `.github/workflows/tests.yml` runs the test suite on every push. A second job installs exactly what the live demo installs (`app/requirements.txt`, Python 3.11), downloads the models from Hugging Face and runs the dashboard in embedded mode with real predictions (`tests/test_dashboard_embedded.py`), so a library-version mismatch with the uploaded models fails CI instead of the live site. It needs one repository variable: **Settings → Secrets and variables → Actions → Variables → `MODEL_REPO`** = your Hugging Face model repo. To run the embedded-mode test locally, set `MODELS_DIR=models` (or `MODEL_REPO`) before `pytest`.
 
@@ -124,7 +124,7 @@ The notebooks in `notebooks/` run in order, `01_eda` through `15_interval_fix`.
 ## 5. Repository
 
 ```
-├── notebooks/            # 01 EDA → 12 interval calibration → 13 censoring experiment → 14–15 interval fix
+├── notebooks/            # 01 EDA → 12 interval calibration → 13 censoring experiment → 14–15 interval fix → 16 uncapped upper bound
 ├── src/turbofan_rul/     # data loading, labeling, features, models, evaluation, CV, conformal, inference, export
 ├── tests/                # 163 tests (GitHub Actions: .github/workflows/tests.yml)
 ├── scripts/              # Docker smoke test (GitHub Actions: .github/workflows/docker.yml)
@@ -140,7 +140,7 @@ The notebooks in `notebooks/` run in order, `01_eda` through `15_interval_fix`.
 ## 6. Limitations
 
 - **FD004 is a transfer test.** It deliberately reuses FD001's tuned hyperparameters, to check whether the FD001 recipe holds on a harder subset without re-tuning. FD002 and FD003 are evaluation-only.
-- **Long-lived engines on FD004.** The interval covers 73% of FD004 test engines with more than 125 cycles left. These misses are on the safe side (the engine outlives the interval), but fixing them needs a model trained without the 125-cycle cap, not more calibration.
+- **Long-lived engines on FD004.** The interval covers 73% of FD004 test engines with more than 125 cycles left. These misses are on the safe side (the engine outlives the interval). An upper bound from an RSF trained without the 125-cycle cap reaches 100%, but makes intervals for healthy engines much wider and adds about 200 MB of models; it was measured and deliberately not deployed ([notebook 16](notebooks/16_uncapped_upper_bound.ipynb)). Without the cap, the *point estimate* gets worse (RMSE 24.4 → 28.0 out of fold on FD001), so the cap stays.
 - **Censoring convention.** Training labels treat rows beyond the 125-cycle cap as failures at 125, the standard convention. Censoring those rows instead broke the Weibull model, so it was rejected.
 - **The survival-vs-regression evidence comes from simulated censoring** on FD001, with untuned regressors.
 - **The live demo runs in one process** (embedded mode), not as two services. This is a free-hosting constraint.

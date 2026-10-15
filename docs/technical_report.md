@@ -256,7 +256,24 @@ Every Weibull miss in that group was on the dangerous side: the true remaining l
 
 **Decision: the hybrid is the deployed interval.** No model was retrained: it is computed from the already-exported RSF and Weibull models. The export metadata records it (`"interval": {"base": "hybrid", "mode": "none", ...}`), and `inference.py` serves it by default for bundles exported earlier. The API still returns Weibull's own interval (`weibull_interval_90`) and the calibrated RSF interval for comparison.
 
-Caveats: the test sets had already been used by notebook 14 to find the problem, so the confirmation isn't fully independent, and the selection rule was finalised after a first look at FD001's out-of-fold table (not the test set). FD004 above the cap stays at 73%: those misses are on the safe side, and every candidate shared Weibull's upper bound, so fixing them needs a model of long remaining life (e.g. training without the cap), not calibration.
+Caveats: the test sets had already been used by notebook 14 to find the problem, so the confirmation isn't fully independent, and the selection rule was finalised after a first look at FD001's out-of-fold table (not the test set). FD004 above the cap stays at 73%: those misses are on the safe side, and every candidate shared Weibull's upper bound, so fixing them needs a model of long remaining life, not calibration. That is tested next.
+
+### Training without the cap: measured, not deployed (notebook 16)
+
+Every model is trained on remaining life clipped at 125 cycles, so no interval's upper bound can reach far past it. `notebooks/16_uncapped_upper_bound.ipynb` repeats notebook 15's out-of-fold protocol with the cap removed (`out_of_fold_intervals(cap=...)`), for the point estimate and for the upper bound, with rules fixed before the test sets were used.
+
+**Point estimate: the cap stays.** Uncapped RSF is worse on both subsets out of fold (FD001 C-index 0.864 → 0.852, RMSE 24.4 → 28.0; FD004 0.846 → 0.840, 37.0 → 40.4). It gains above the cap but loses more between 26 and 125 cycles, where most engines are: early-life sensors carry almost no degradation signal.
+
+**Upper bound: the uncapped RSF fixes the long-lived band.** Keeping notebook 15's lower bound and taking the upper bound from an uncapped RSF is the only option that clears 85% in every band on both subsets; an uncapped Weibull upper bound just misses on FD001 (84% above the cap). The leaf-5 forest would add about 1.2 GB of models, so the leaf-30 version (about 200 MB, chosen for size before its results were known) was the one checked on the test sets:
+
+| Test set | Above the cap | Overall | Mean width (cycles) |
+|---|---|---|---|
+| FD001, deployed → uncapped upper | 91% → 100% | 97.0% → 99.0% | 100 → 127 |
+| FD004, deployed → uncapped upper | 73% → 100% | 88.7% → 98.4% | 100 → 160 |
+
+The width lands on engines predicted healthy (FD004 median 128 → 217 cycles); near failure the interval gets slightly tighter (43 → 36).
+
+**Decision: recorded, not deployed.** The misses it fixes are on the safe side; the upper bound barely drives maintenance decisions (which run off how soon an engine could fail); it over-covers (98–99% against a nominal 90%); and it costs a second forest per subset (about 200 MB), more live-demo memory and a longer Docker build. A use that needs a trustworthy upper bound, such as fleet planning for healthy engines, would change that.
 
 ---
 
@@ -273,7 +290,7 @@ Caveats: the test sets had already been used by notebook 14 to find the problem,
 ```
 turbofan-rul/
 ├── docs/project_brief.md              # full technical spec
-├── notebooks/                         # 01 EDA → 12 RSF interval calibration → 13 censoring experiment → 14–15 interval fix
+├── notebooks/                         # 01 EDA → 12 RSF interval calibration → 13 censoring experiment → 14–15 interval fix → 16 uncapped upper bound
 ├── src/turbofan_rul/
 │   ├── data_loading.py                # download + validate C-MAPSS (all 4 subsets)
 │   ├── labeling.py                    # piecewise RUL, (duration, event) construction
@@ -350,7 +367,7 @@ Seven bugs found during the project, and how each was fixed:
 
 ## 12. Scope notes
 
-- **FD001 gets the full, tuned treatment; FD004 is a transfer test**: it gets the full ladder but deliberately inherits FD001's tuned hyperparameters, to check whether the recipe holds without re-tuning. Its served interval covers 88.7% of test engines, but only 73% of those with more than 125 cycles left (safe-side misses; see section 9). FD002/FD003 are evaluation-only (RSF, no deployment) — lighter checks isolating one complexity axis each, not full builds.
+- **FD001 gets the full, tuned treatment; FD004 is a transfer test**: it gets the full ladder but deliberately inherits FD001's tuned hyperparameters, to check whether the recipe holds without re-tuning. Its served interval covers 88.7% of test engines, but only 73% of those with more than 125 cycles left (safe-side misses; an uncapped upper bound fixing them was measured and not deployed, see section 9). FD002/FD003 are evaluation-only (RSF, no deployment) — lighter checks isolating one complexity axis each, not full builds.
 - **Phase 7 (deep survival) is a stretch phase.** It would only have been deployed if it beat RSF; it didn't.
 - **Training labels use `event=1` for every row**, including rows at the 125-cycle cap; the censored alternative was tested and rejected because it breaks the deployed Weibull interval (see [Feature engineering](#2-feature-engineering)).
 - **The survival-vs-regression comparison uses simulated censoring** (FD001, one mechanism, untuned regressors); on this data a regression that drops unfinished engines matches RSF's accuracy. See [notebook 13's section](#6-does-survival-analysis-actually-beat-regression-tested-with-a-mixed-answer).
