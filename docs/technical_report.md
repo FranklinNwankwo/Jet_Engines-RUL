@@ -12,7 +12,7 @@ The full methods, results and decisions behind [`README.md`](../README.md). The 
 6. [Does survival analysis actually beat regression? Tested, with a mixed answer](#6-does-survival-analysis-actually-beat-regression-tested-with-a-mixed-answer)
 7. [Generalization: FD002/FD003/FD004](#7-generalization-fd002fd003fd004)
 8. [Hyperparameter tuning: a modest win, with weaker CV support](#8-hyperparameter-tuning-a-modest-win-with-weaker-cv-support)
-9. [RSF interval calibration: a fix that validated the original design instead of replacing it](#9-rsf-interval-calibration-a-fix-that-validated-the-original-design-instead-of-replacing-it)
+9. [Interval calibration: two subgroup checks, at opposite ends](#9-interval-calibration-two-subgroup-checks-at-opposite-ends)
 10. [Deployment: a FastAPI service + dashboard, live on Streamlit Community Cloud](#10-deployment-a-fastapi-service--dashboard-live-on-streamlit-community-cloud)
 11. [Bugs caught along the way](#11-bugs-caught-along-the-way)
 12. [Scope notes](#12-scope-notes)
@@ -210,7 +210,9 @@ Tuned against the same 5-fold CV protocol as Phase 11 — searching and reportin
 
 ---
 
-## 9. RSF interval calibration: a fix that validated the original design instead of replacing it
+## 9. Interval calibration: two subgroup checks, at opposite ends
+
+### The long-lived end: calibrated RSF fails above the cap (notebook 12)
 
 Phase 6 found RSF's 90% intervals under-cover (~86-87% actual). `notebooks/12_rsf_interval_calibration.ipynb` fixes this directly with **cross-conformal prediction** — a model-agnostic technique that widens an interval by a single correction, calibrated on out-of-fold predictions, until it hits target coverage, rather than hoping the model's quantiles happen to be well-calibrated probabilities. The resulting coverage is an empirical result to be checked, not a guarantee: the standard finite-sample guarantee of split conformal doesn't strictly carry over to the cross-conformal variant, or to rows that are correlated within an engine.
 
@@ -227,13 +229,40 @@ Phase 6 found RSF's 90% intervals under-cover (~86-87% actual). `notebooks/12_rs
 
 **It doesn't.** RSF's survival curve is only defined over its training time support (~125 cycles) — a known structural limit from Phase 5. A uniform additive correction can't manufacture support the model never had; it just shifts a hard ceiling from ~125 to ~130. The aggregate 90% coverage is almost entirely carried by the majority of engines within that ceiling, while coverage on the exact engines Weibull exists to cover collapses to worse than a coin flip. This is precisely the kind of subgroup check Phase 6's calibration-by-risk-bin analysis was built to catch, now applied to a new model.
 
-**Decision: Weibull stays the primary deployed interval**, now for a demonstrated reason. The calibrated RSF interval is still useful (tighter, better-calibrated for the non-ceiling-affected majority), so it's exposed as a clearly-labeled **supplementary field** (`rsf_calibrated_interval_supplementary`) in both the API and dashboard — informational, not authoritative. `export_deployment_artifacts.py` computes the correction reproducibly as part of a normal build for every subset it exports (5 additional RSF fits — a deliberate cost for a clean-checkout guarantee). FD004 gets its own correction this way (**q = 36.00 cycles**, reflecting its much harder prediction problem), but unlike FD001's, its resulting coverage on FD004's official test set hasn't been checked in a notebook — a stated scope gap.
+**Decision at the time: Weibull stays the primary deployed interval**, now for a demonstrated reason. The calibrated RSF interval is still useful (tighter, better-calibrated for the non-ceiling-affected majority), so it's exposed as a clearly-labeled **supplementary field** (`rsf_calibrated_interval_supplementary`) in both the API and dashboard — informational, not authoritative. `export_deployment_artifacts.py` computes the correction reproducibly as part of a normal build for every subset it exports (5 additional RSF fits — a deliberate cost for a clean-checkout guarantee). FD004 gets its own correction this way (**q = 36.00 cycles**, reflecting its much harder prediction problem), but unlike FD001's, its resulting coverage on FD004's official test set was only checked later (below).
+
+### The near-failure end: Weibull fails close to failure (notebooks 14–15)
+
+`notebooks/14_interval_coverage_check.ipynb` scored every official test engine through the deployed `inference.predict` (FD001 first, reproducing notebook 12's numbers exactly, then FD004). FD004's calibrated RSF interval reached 87.9% overall, but by widening every interval to 122.6 cycles (Weibull: 98.8), and covered only 55% of the 67 engines above the cap: the same structural failure. Breaking coverage down by true remaining life also found a new problem in the *deployed* interval:
+
+| Engines within 25 cycles of failure | Weibull 90% interval | Calibrated RSF |
+|---|---|---|
+| FD001 (19 engines) | 58% | 100% |
+| FD004 (50 engines) | 54% | 100% |
+
+Every Weibull miss in that group was on the dangerous side: the true remaining life was *below* the lower bound, so the interval promised more life than the engine had. Notebook 12 had missed this because its calibration scored each training engine once, between 30% and 90% of its life, so almost no calibration point was close to failure.
+
+**The fix was selected on training data only** (`notebooks/15_interval_fix.ipynb`, `src/turbofan_rul/interval_calibration.py`). Each training engine was scored at 10 random points between 30% and 99% of its life by fold models that never saw it (5 folds, the deployed recipes): 956 points for FD001, 2,417 for FD004. Six candidates were compared: Weibull alone; calibrated RSF; Weibull with a separate conformal correction per band of the RSF prediction ("Mondrian"); and a hybrid (lower bound = the more cautious of RSF's and Weibull's, upper bound = Weibull's) with no correction, one correction, or per-band corrections. Corrections were cross-fitted (calibrated on half the engines, scored on the other half). The rule: ≥ 88% coverage overall and ≥ 85% within 25 cycles of failure on both subsets, then the narrowest wins. Training data alone reproduced the problem (Weibull: 62% near failure on both subsets) and selected the **hybrid with no correction**, about one cycle wider on average than Weibull.
+
+**Confirmed on the official test sets:**
+
+| | FD001 Weibull | FD001 hybrid | FD004 Weibull | FD004 hybrid |
+|---|---|---|---|---|
+| Coverage | 89.0% | **97.0%** | 80.6% | **88.7%** |
+| Within 25 cycles of failure | 57.9% | **100%** | 54.0% | **94.0%** |
+| Above the 125-cycle cap | 90.9% | 90.9% | 73.1% | 73.1% |
+| Dangerous misses | 8 | **0** | 23 | **3** |
+| Mean width (cycles) | 98.6 | 99.7 | 98.8 | 100.0 |
+
+**Decision: the hybrid is the deployed interval.** No model was retrained: it is computed from the already-exported RSF and Weibull models. The export metadata records it (`"interval": {"base": "hybrid", "mode": "none", ...}`), and `inference.py` serves it by default for bundles exported earlier. The API still returns Weibull's own interval (`weibull_interval_90`) and the calibrated RSF interval for comparison.
+
+Caveats: the test sets had already been used by notebook 14 to find the problem, so the confirmation isn't fully independent, and the selection rule was finalised after a first look at FD001's out-of-fold table (not the test set). FD004 above the cap stays at 73%: those misses are on the safe side, and every candidate shared Weibull's upper bound, so fixing them needs a model of long remaining life (e.g. training without the cap), not calibration.
 
 ---
 
 ## 10. Deployment: a FastAPI service + dashboard, live on Streamlit Community Cloud
 
-**Model pairing, driven by the evaluation above:** RSF supplies the point estimate and risk ranking (best NASA score, best concordance); **Weibull AFT supplies the confidence interval**, since RSF's own intervals under-cover and can't extrapolate past its training ceiling while Weibull's are calibrated and unbounded. Cox PH isn't deployed: RSF beats it on every point-estimate and ranking metric, and Cox produces no natural interval to compete with Weibull's. (Against Weibull alone, Cox is not uniformly worse — on FD001 it has the better test C-index, RMSE and MAE, and on FD004 the better RMSE and NASA score — but neither is the deployed point model.) Applies per-subset: FD001 and FD004 each get their own RSF + Weibull pair.
+**Model pairing, driven by the evaluation above:** RSF supplies the point estimate and risk ranking (best NASA score, best concordance); **the confidence interval combines RSF and Weibull AFT** (section 9): its lower bound is the more cautious of the two, since Weibull's alone promises too much life near failure, and its upper bound is Weibull's, since RSF can't extrapolate past its training ceiling. Cox PH isn't deployed: RSF beats it on every point-estimate and ranking metric, and Cox produces no natural interval to compete with Weibull's. (Against Weibull alone, Cox is not uniformly worse — on FD001 it has the better test C-index, RMSE and MAE, and on FD004 the better RMSE and NASA score — but neither is the deployed point model.) Applies per-subset: FD001 and FD004 each get their own RSF + Weibull pair.
 
 **In the Docker deployment: two separate services communicating over HTTP.** `api/main.py` (FastAPI) owns every model artifact and all scoring logic; `app/streamlit_app.py` holds no model artifacts and calls the API's `/predict`, `/subsets`, and `/subsets/{subset}/metadata` endpoints over plain HTTP, using `API_BASE_URL` (an environment variable, not a hardcoded address) to find it — `http://localhost:8000` for local development, or `http://api:8000` under Docker Compose's service-name DNS. A direct, measurable consequence: the dashboard image's dependency list (`requirements-app.txt`) doesn't include scikit-learn, scikit-survival, or lifelines at all, and the model code is only imported lazily in embedded mode (below) — so in the Docker deployment the dashboard cannot load a model at all.
 
@@ -244,7 +273,7 @@ Phase 6 found RSF's 90% intervals under-cover (~86-87% actual). `notebooks/12_rs
 ```
 turbofan-rul/
 ├── docs/project_brief.md              # full technical spec
-├── notebooks/                         # 01 EDA → 12 RSF interval calibration → 13 censoring experiment
+├── notebooks/                         # 01 EDA → 12 RSF interval calibration → 13 censoring experiment → 14–15 interval fix
 ├── src/turbofan_rul/
 │   ├── data_loading.py                # download + validate C-MAPSS (all 4 subsets)
 │   ├── labeling.py                    # piecewise RUL, (duration, event) construction
@@ -253,6 +282,7 @@ turbofan-rul/
 │   ├── deep_survival.py               # from-scratch discrete-hazard MLP + Keras helpers
 │   ├── cross_validation.py            # GroupKFold + truncation-point sampling for CV
 │   ├── conformal.py                    # cross-conformal RSF interval calibration
+│   ├── interval_calibration.py        # out-of-fold interval candidates, Mondrian calibration, the served interval
 │   ├── evaluation.py                  # NASA score, C-index, calibration
 │   ├── inference.py                   # single scoring function -- the API and the dashboard's embedded mode
 │   └── export_deployment_artifacts.py # reproducible artifact build, per subset (see below)
@@ -267,7 +297,7 @@ turbofan-rul/
 ├── docker-compose.yml                 # local two-service orchestration
 ├── requirements-api.txt               # lean, API-only deps (no jupyter/matplotlib/tensorflow)
 ├── requirements-app.txt               # leaner still -- streamlit + pandas + requests, nothing ML
-├── tests/                             # 150 tests across 11 files
+├── tests/                             # 163 tests across 12 files
 └── models/
     ├── fd001/                         # RSF + Weibull + metadata for FD001
     └── fd004/                         # RSF + Weibull + regime-clustering artifacts for FD004
@@ -282,7 +312,7 @@ python -m turbofan_rul.export_deployment_artifacts --subset FD004   # optional -
 uvicorn api.main:app --reload                          # API on :8000
 API_BASE_URL=http://localhost:8000 streamlit run app/streamlit_app.py   # dashboard on :8501 (HTTP mode)
 MODELS_DIR=models streamlit run app/streamlit_app.py                    # or: no API, models loaded in-app
-pytest tests/ -v                                       # 150 tests
+pytest tests/ -v                                       # 163 tests
 
 # Containerized, both services:
 docker compose up --build
@@ -294,11 +324,11 @@ docker compose up --build
 
 `inference.py` is the single scoring function — called by the API, and by the dashboard only in its embedded (live-demo) mode, so both paths produce identical predictions. It flags when RSF's point estimate falls outside Weibull's own confidence interval: the two are independent models scoring the same input, nothing forces agreement, and a dashboard showing a point estimate outside its own interval looks broken unless that's labeled as an expected consequence of the two-model design rather than a bug. The API degrades gracefully if only FD001's artifacts have been built — FD004 support is optional, requested per-request via a `subset` field, and a request for a subset that hasn't been built returns a clear 422 rather than a crash.
 
-### Docker: written but not yet built
+### Docker: built and smoke-tested in CI
 
 `api/Dockerfile` builds the FD001 and FD004 models **inside the image at build time** (not mounted or copied from the host — `models/` is gitignored and 200+MB, so there's nothing to copy from a clean clone anyway) by running `export_deployment_artifacts.py` once per subset as separate build steps. The trade-off: a slow `docker build` (the same several-minutes-per-subset cost as running the script directly, since it's the same script — FD004's export took about 6.5 minutes in the most recent test) in exchange for an instant `docker run` with no cold-start model-fitting delay — the right way around for a service, not a notebook. `app/Dockerfile` is lean by construction: it runs the dashboard in HTTP mode, which never imports the modeling code, so its image never installs scikit-learn/scikit-survival/lifelines at all.
 
-**Not yet built:** the build environment used for this project blocks container registries (Docker Hub and GHCR return `403` on `docker pull`), so `docker build` was never run. `docker compose config` accepts the compose file, and everything inside each image was reproduced outside Docker: a clean Python 3.12 environment with `requirements-api.txt`, both FD001 and FD004 exported from nothing and the API serving both; and the dashboard image's contents (only `src/` and `app/`, with only streamlit/pandas/requests) starting cleanly with no ML library. A fresh-clone test of the full pipeline (install, export, serve, test) is described under bug #5. Run `docker compose up --build` to verify the container layer itself.
+**Verified in CI.** The development sandbox blocked container registries, so the images are built on GitHub Actions instead (`.github/workflows/docker.yml`): `docker compose build`, `docker compose up --wait` (which waits on the API's healthcheck), then `scripts/docker_smoke_test.py` run inside each container. In the API container it checks that `/health` lists FD001 and FD004, that test engine 1 of each subset gets a prediction in the expected range with an ordered 90% interval (FD001 121 cycles [52, 237]; FD004 33 [13, 59] — the same numbers as embedded mode), and that an empty request is rejected with 422. In the dashboard container it checks that the API is reachable at `http://api:8000` over the Compose network, then runs the real dashboard headlessly (Streamlit `AppTest`) in HTTP mode and makes a prediction through the API — proving the two services work together, not just that each starts. The first run passed in about 9 minutes, most of it the FD001 and FD004 exports inside the API image build. The job runs weekly, on demand, and on any push that changes what goes into the images.
 
 **Framework note:** deep survival modeling in Phase 7 uses `tensorflow-cpu` rather than PyTorch — PyPI's default `torch` package bundles several GB of CUDA dependencies that exceeded the sandboxed build environment's disk, and the official CPU-only wheel index is outside its network allowlist. `tensorflow-cpu` is a genuine CPU-only build. This was an environment constraint, not a framework preference; a normal environment would just `pip install torch`. (Not relevant to the deployed containers above — neither image installs tensorflow at all, since Phase 7 was never a deployment candidate.)
 
@@ -320,9 +350,8 @@ Seven bugs found during the project, and how each was fixed:
 
 ## 12. Scope notes
 
-- **FD001 gets the full, tuned, interval-calibrated treatment; FD004 gets the full ladder but inherits FD001's tuned hyperparameters**, and while the export script computes its own RSF interval correction (36.00 cycles), the calibrated interval's coverage on FD004's test set hasn't been checked. FD002/FD003 are evaluation-only (RSF, no deployment) — lighter checks isolating one complexity axis each, not full builds.
+- **FD001 gets the full, tuned treatment; FD004 is a transfer test**: it gets the full ladder but deliberately inherits FD001's tuned hyperparameters, to check whether the recipe holds without re-tuning. Its served interval covers 88.7% of test engines, but only 73% of those with more than 125 cycles left (safe-side misses; see section 9). FD002/FD003 are evaluation-only (RSF, no deployment) — lighter checks isolating one complexity axis each, not full builds.
 - **Phase 7 (deep survival) is a stretch phase.** It would only have been deployed if it beat RSF; it didn't.
 - **Training labels use `event=1` for every row**, including rows at the 125-cycle cap; the censored alternative was tested and rejected because it breaks the deployed Weibull interval (see [Feature engineering](#2-feature-engineering)).
 - **The survival-vs-regression comparison uses simulated censoring** (FD001, one mechanism, untuned regressors); on this data a regression that drops unfinished engines matches RSF's accuracy. See [notebook 13's section](#6-does-survival-analysis-actually-beat-regression-tested-with-a-mixed-answer).
-- **Docker files exist but are unverified in this build environment** — see the Deployment section.
 - **The public demo runs in one process** (the dashboard's embedded mode on Streamlit Community Cloud), not as the two-container deployment — a hosting constraint, documented in the Deployment section. Its models live in a Hugging Face model repo and must be re-uploaded after every re-export, with the pinned library versions kept in step.

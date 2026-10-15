@@ -70,11 +70,12 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="Turbofan RUL Prediction API",
     description="Predicts remaining useful life for turbofan engines from recent sensor telemetry, "
-                "using a Random Survival Forest (point estimate/ranking) and a Weibull AFT model "
-                "(confidence interval) -- see docs/project_brief.md for the model selection rationale. "
+                "using a Random Survival Forest (point estimate/ranking) and a 90% interval combining "
+                "RSF and a Weibull AFT model (lower bound = the more cautious of the two, upper bound = "
+                "Weibull) -- see docs/technical_report.md for the model selection rationale. "
                 "Supports FD001 (single regime/fault mode) and, if built, FD004 (6 regimes, 2 fault "
                 "modes) via the `subset` field.",
-    version="0.2.0",
+    version="0.3.0",
     lifespan=lifespan,
 )
 
@@ -144,6 +145,7 @@ class PredictResponse(BaseModel):
     risk_level: str
     cycles_observed: int
     model_source: dict
+    weibull_interval_90: list[float]
     rsf_calibrated_interval_supplementary: dict
 
 

@@ -43,8 +43,38 @@ def test_predict_returns_expected_keys(bundle, sample_readings):
     result = inference.predict(bundle, sample_readings)
     assert set(result.keys()) == {
         "subset", "predicted_rul_cycles", "confidence_interval_90", "point_estimate_outside_interval",
-        "risk_level", "cycles_observed", "model_source", "rsf_calibrated_interval_supplementary",
+        "risk_level", "cycles_observed", "model_source", "weibull_interval_90",
+        "rsf_calibrated_interval_supplementary",
     }
+
+
+def test_served_interval_combines_rsf_and_weibull(bundle, sample_readings):
+    """Phase 24: lower bound = the more cautious of RSF's raw and Weibull's
+    lower bounds; upper bound = Weibull's."""
+    from turbofan_rul import features, models as models_module
+
+    result = inference.predict(bundle, sample_readings)
+    low, high = result["confidence_interval_90"]
+    w_low, w_high = result["weibull_interval_90"]
+
+    working = sample_readings.copy()
+    working["unit_number"] = 1
+    feature_row = features.build_feature_matrix(working, kept_sensors=bundle.kept_sensors).iloc[[-1]]
+    raw = models_module.predict_rul_from_survival(bundle.rsf_model, feature_row[bundle.full_feature_cols])
+    rsf_low = float(raw["pred_ci_low"].iloc[0])
+
+    tol = 0.05 + 1e-6  # outputs are rounded to 1 decimal
+    assert low == pytest.approx(max(min(rsf_low, w_low), 0.0), abs=tol)
+    assert high == pytest.approx(w_high, abs=tol)
+
+
+def test_bundle_without_interval_metadata_serves_default(bundle):
+    """Bundles exported before Phase 24 have no "interval" entry; they must
+    still serve the Phase 24 interval."""
+    meta = __import__("json").loads((MODELS_DIR / "deployment_metadata.json").read_text())
+    expected = meta.get("interval", inference.DEFAULT_INTERVAL.to_dict())
+    assert bundle.interval.to_dict() == expected
+    assert inference.DEFAULT_INTERVAL.base == "hybrid" and inference.DEFAULT_INTERVAL.mode == "none"
 
 
 def test_predict_rsf_calibrated_interval_is_ordered(bundle, sample_readings):

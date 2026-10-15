@@ -2,19 +2,23 @@
 Inference: turns recent raw sensor readings for one engine into a RUL
 prediction with a confidence interval and a risk flag.
 
-This module is the single scoring function, used by `api/main.py`. The
-Streamlit dashboard (`app/streamlit_app.py`) does not import it: since the
-Phase 15 refactor the dashboard is a pure HTTP client that calls the API's
-`/predict` endpoint, so this module runs only inside the API service. See
-`export_deployment_artifacts.py` for how the artifacts this module loads
-are produced.
+This module is the single scoring function, used by `api/main.py`, and by
+the Streamlit dashboard only in its embedded (live-demo) mode; in HTTP mode
+the dashboard calls the API instead. Both paths therefore produce identical
+predictions. See `export_deployment_artifacts.py` for how the artifacts
+this module loads are produced.
 
-Per the Phase 6 deployment decision: Random Survival Forest supplies the
-point estimate and risk ranking (best concordance and NASA score across the
-model ladder), Weibull AFT supplies the confidence interval (RSF's own
-intervals under-cover and it cannot predict past its training time
-ceiling). Serving two models per request is a direct consequence of the
-evaluation in Phase 6, not an implementation convenience.
+Random Survival Forest supplies the point estimate and risk ranking (best
+concordance and NASA score across the model ladder, Phase 6). The 90%
+interval combines both models (Phase 24, notebooks/15_interval_fix.ipynb):
+its lower bound is the more cautious (smaller) of RSF's and Weibull AFT's
+lower bounds, and its upper bound is Weibull's. Weibull alone (the Phase 6
+choice) covered only ~55% of engines within 25 cycles of failure, always
+promising more life than they had; RSF alone can't reach past its 125-cycle
+training ceiling. The combination keeps Weibull's reach above the cap and
+RSF's caution near failure. The bundle's `interval` setting
+(`interval_calibration.IntervalCalibration`) records which interval is
+served, so a future export can change it without a code change.
 
 Multi-subset support (Phase 12d): `load_deployment_bundle` takes a
 subset-specific directory (`models/fd001/`, `models/fd004/`). FD004's
@@ -36,7 +40,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from . import conformal, features, models
+from . import conformal, features, interval_calibration, models
 
 # Risk-band thresholds on the RSF point estimate, in cycles. These are an
 # illustrative default policy, not a value learned from data -- a real
@@ -47,6 +51,9 @@ from . import conformal, features, models
 RISK_THRESHOLDS = {"critical": 20, "warning": 50}
 
 SENSOR_COLS = [f"sensor_{i}" for i in range(1, 22)]
+
+# The interval served when a bundle's metadata doesn't name one (Phase 24).
+DEFAULT_INTERVAL = interval_calibration.IntervalCalibration(base="hybrid", mode="none")
 
 
 @dataclass
@@ -64,6 +71,14 @@ class DeploymentBundle:
     regime_kmeans: object = None
     regime_norm_stats: object = None
     rsf_interval_correction: float = 0.0
+    # Bundles exported before Phase 24 have no "interval" entry in their
+    # metadata; they get the Phase 24 interval, which needs no fitted
+    # correction (hybrid base, no calibration), so old exports serve it too.
+    interval: interval_calibration.IntervalCalibration = None
+
+    def __post_init__(self):
+        if self.interval is None:
+            self.interval = DEFAULT_INTERVAL
 
     @property
     def uses_regime_clustering(self) -> bool:
@@ -99,6 +114,8 @@ def load_deployment_bundle(models_dir: Path | str) -> DeploymentBundle:
         regime_kmeans=regime_kmeans,
         regime_norm_stats=regime_norm_stats,
         rsf_interval_correction=meta.get("rsf_interval_correction", 0.0),
+        interval=(interval_calibration.IntervalCalibration.from_dict(meta["interval"])
+                  if "interval" in meta else None),
     )
 
 
@@ -164,20 +181,26 @@ def predict(bundle: DeploymentBundle, readings: pd.DataFrame) -> dict:
     rsf_ci_low_raw = float(rsf_out["pred_ci_low"].iloc[0])
     rsf_ci_high_raw = float(rsf_out["pred_ci_high"].iloc[0])
 
-    # --- Weibull AFT: PRIMARY confidence interval, on the curated/scaled feature subset ---
-    curated = feature_row[bundle.curated_feature_cols].copy()
-    curated[bundle.curated_feature_cols] = bundle.weibull_scaler.transform(curated)
-    ci_low = float(bundle.weibull_model.predict_percentile(curated, p=0.95).iloc[0])
-    ci_high = float(bundle.weibull_model.predict_percentile(curated, p=0.05).iloc[0])
+    # --- Weibull AFT interval, on the curated/scaled feature subset ---
+    w_low, w_high = interval_calibration.weibull_interval(
+        bundle.weibull_model, bundle.weibull_scaler, feature_row[bundle.curated_feature_cols]
+    )
+    weibull_low, weibull_high = float(w_low[0]), float(w_high[0])
+
+    # --- The served 90% interval (Phase 24): combines RSF and Weibull ---
+    low, high = bundle.interval.apply(
+        [predicted_rul], [rsf_ci_low_raw], [rsf_ci_high_raw], [weibull_low], [weibull_high]
+    )
+    ci_low, ci_high = float(low[0]), float(high[0])
 
     # --- RSF's OWN interval, conformally calibrated (Phase 14) -- supplementary only.
     # Calibration (notebooks/12_rsf_interval_calibration.ipynb) reached ~90% coverage
     # in aggregate on the official test set, but coverage collapsed to ~27% specifically
     # on engines above RSF's training time ceiling (~cap cycles) -- a uniform additive
-    # correction cannot fix a structural support problem. That's exactly the failure
-    # mode Weibull's unbounded parametric interval was kept as PRIMARY to cover, so this
-    # field is exposed for transparency/comparison, never as the interval a caller should
-    # rely on for risk decisions.
+    # correction cannot fix a structural support problem (55% on FD004, notebook 14).
+    # The served interval takes its upper bound from Weibull for exactly that reason,
+    # so this field is exposed for transparency/comparison, never as the interval a
+    # caller should rely on for risk decisions.
     rsf_cal_low, rsf_cal_high = conformal.apply_conformal_correction(
         np.array([rsf_ci_low_raw]), np.array([rsf_ci_high_raw]), bundle.rsf_interval_correction
     )
@@ -195,10 +218,9 @@ def predict(bundle: DeploymentBundle, readings: pd.DataFrame) -> dict:
     predicted_rul_out = round(predicted_rul, 1)
     ci_low_out, ci_high_out = round(ci_low, 1), round(ci_high, 1)
 
-    # RSF and Weibull AFT are independent models scoring the same input --
-    # nothing forces the RSF point estimate to fall inside the Weibull
-    # interval. Surfaced explicitly rather than left for a viewer to notice
-    # unaided.
+    # The interval's upper bound comes from Weibull AFT, an independent model
+    # scoring the same input, so nothing forces the RSF point estimate below
+    # it. Surfaced explicitly rather than left for a viewer to notice unaided.
     point_outside_interval = not (ci_low_out <= predicted_rul_out <= ci_high_out)
 
     return {
@@ -208,11 +230,16 @@ def predict(bundle: DeploymentBundle, readings: pd.DataFrame) -> dict:
         "point_estimate_outside_interval": point_outside_interval,
         "risk_level": risk_level,
         "cycles_observed": int(readings["time_cycles"].iloc[-1]),
-        "model_source": {"point_estimate": "random_survival_forest", "interval": "weibull_aft"},
+        "model_source": {
+            "point_estimate": "random_survival_forest",
+            "interval": f"{bundle.interval.name}: lower = min(RSF, Weibull AFT), upper = Weibull AFT"
+                        if bundle.interval.base == "hybrid" else bundle.interval.name,
+        },
+        "weibull_interval_90": [round(weibull_low, 1), round(weibull_high, 1)],
         "rsf_calibrated_interval_supplementary": {
             "interval_90": [round(float(rsf_cal_low[0]), 1), round(float(rsf_cal_high[0]), 1)],
             "caveat": "Conformally calibrated for aggregate coverage, but unreliable for "
                       "engines near/beyond RSF's training time ceiling -- see README. "
-                      "Informational only; confidence_interval_90 (Weibull) is authoritative.",
+                      "Informational only; confidence_interval_90 is authoritative.",
         },
     }

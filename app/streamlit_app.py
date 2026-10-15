@@ -349,8 +349,8 @@ def sensor_chart(engine_df: pd.DataFrame, sensors: list[str]) -> alt.FacetChart:
 
 
 def rul_chart(result: dict, true_rul: float | None) -> alt.LayerChart:
-    """One horizontal "ruler" in cycles: shaded risk zones, the deployed
-    Weibull 90% interval, RSF's supplementary interval, the point estimate,
+    """One horizontal "ruler" in cycles: shaded risk zones, the served 90%
+    interval, RSF's supplementary interval, the point estimate,
     and (for demo engines) the true RUL. Every layer uses fixed colours
     rather than a colour encoding, so the layers can't fight over a shared
     colour scale."""
@@ -360,7 +360,7 @@ def rul_chart(result: dict, true_rul: float | None) -> alt.LayerChart:
     # Each band is a rectangle at a fixed vertical position (in arbitrary
     # 0-3 units) rather than a categorical row, so the chart keeps a fixed
     # height and both bars stay readable at phone width.
-    bands = [("Weibull AFT 90% interval", w_low, w_high, "#38BDF8", 1.45, 2.45)]
+    bands = [("90% interval (RSF + Weibull)", w_low, w_high, "#38BDF8", 1.45, 2.45)]
     rsf_cal = result.get("rsf_calibrated_interval_supplementary")
     if rsf_cal:
         r_low, r_high = rsf_cal["interval_90"]
@@ -411,7 +411,7 @@ def chart_legend(has_true_rul: bool) -> str:
     encodings, which rul_chart deliberately avoids."""
     items = [
         '<span style="color:#F5A524;font-weight:700">━</span> Predicted (RSF)',
-        '<span style="color:#38BDF8;font-weight:700">■</span> Weibull 90% interval',
+        '<span style="color:#38BDF8;font-weight:700">■</span> 90% interval',
         '<span style="color:#A78BFA;font-weight:700">■</span> RSF calibrated',
     ]
     if has_true_rul:
@@ -445,7 +445,8 @@ def render_prediction(result: dict, true_rul: float | None = None) -> None:
     c1.markdown(card("Predicted remaining life", f"{pred:.0f}", "cycles",
                      "Random Survival Forest point estimate"), unsafe_allow_html=True)
     c2.markdown(card("90% confidence interval", f"{low:.0f} – {high:.0f}", "cycles",
-                     "Weibull AFT — the authoritative interval"), unsafe_allow_html=True)
+                     "Lower bound: the more cautious of RSF and Weibull AFT · upper: Weibull AFT"),
+                unsafe_allow_html=True)
     badge = (f'<div class="card"><div class="label">Risk level</div>'
              f'<div class="risk-badge" style="background:{risk["color"]}22;color:{risk["color"]};'
              f'border:1px solid {risk["color"]}66"><span class="risk-dot" '
@@ -470,8 +471,9 @@ def render_prediction(result: dict, true_rul: float | None = None) -> None:
     if result["point_estimate_outside_interval"]:
         st.info(
             "The point estimate falls outside its own interval. This is an expected "
-            "consequence of using two independent models (Random Survival Forest for the "
-            "point estimate, Weibull AFT for the interval) rather than a bug.",
+            "consequence of using two independent models (the interval's upper bound comes "
+            "from Weibull AFT, the point estimate from the Random Survival Forest) rather "
+            "than a bug.",
             icon="ℹ️",
         )
 
@@ -494,7 +496,7 @@ st.markdown(
       <h1>How long until this engine fails?</h1>
       <p>Remaining-useful-life prediction for turbofan engines, framed as a
          survival-analysis problem: a Random Survival Forest gives the estimate and
-         risk ranking, a Weibull AFT model gives a calibrated 90% interval.</p>
+         risk ranking, and a 90% interval combines it with a Weibull AFT model.</p>
       <div class="pills">
         <span class="pill">Random Survival Forest</span>
         <span class="pill">Weibull AFT</span>
@@ -559,7 +561,9 @@ with st.sidebar:
             "2. The API rebuilds the same rolling-window features used in training.\n"
             "3. **Random Survival Forest** estimates the survival curve; the area under it "
             "is the predicted remaining life.\n"
-            "4. **Weibull AFT** provides the 90% interval, because it can extrapolate "
+            "4. The **90% interval** combines two models: its lower bound is the more "
+            "cautious of the forest's and a **Weibull AFT** model's, so it doesn't promise "
+            "too much life near failure; its upper bound is Weibull's, which can extrapolate "
             "beyond the 125-cycle training cap where the forest cannot.\n"
             "5. Risk: critical < 20 cycles, warning < 50, otherwise healthy."
         )

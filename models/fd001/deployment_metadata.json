@@ -304,5 +304,21 @@
   "rsf_min_samples_leaf": 5,
   "rsf_row_stride": 3,
   "rsf_interval_correction": 4.998999999999995,
+  "interval": {
+    "base": "hybrid",
+    "mode": "none",
+    "alpha": 0.1,
+    "corrections": [
+      0.0,
+      0.0,
+      0.0
+    ],
+    "pred_bands": [
+      0.0,
+      40.0,
+      90.0,
+      null
+    ]
+  },
   "recommended_min_history_cycles": 30
 }

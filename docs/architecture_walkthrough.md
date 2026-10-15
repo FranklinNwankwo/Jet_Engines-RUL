@@ -28,7 +28,8 @@ This is the "how did we get here" document; every phase, what triggered it, what
 22. [Phase 21: README rewritten for readers, detail moved to a technical report](#22-phase-21-readme-rewritten-for-readers-detail-moved-to-a-technical-report)
 23. [Phase 22: continuous integration](#23-phase-22-continuous-integration)
 24. [Phase 23: Docker, finally built](#24-phase-23-docker-finally-built)
-25. [Where things stand](#25-where-things-stand)
+25. [Phase 24: the deployed interval, checked at the other end](#25-phase-24-the-deployed-interval-checked-at-the-other-end)
+26. [Where things stand](#26-where-things-stand)
 
 ---
 
@@ -194,7 +195,7 @@ This phase went through three distinct versions, which is worth tracing since it
 
 **Validated on the real official test set, and here's where it got interesting:** coverage moved from 0.870 to almost exactly 0.900 — it held on unseen engines, not just on the calibration set, though as an empirical result rather than a guarantee. In aggregate, the calibrated RSF interval now looked *strictly better* than the deployed Weibull interval: better coverage (0.900 vs. 0.890) and 40% narrower (59.6 vs. 98.6 cycles mean width). That would have justified simplifying the whole deployment to RSF alone, except checking by subgroup (the same instinct behind Phase 6's calibration-by-risk-bin analysis) found the aggregate number was hiding a near-total failure: coverage on the 11 engines above RSF's structural training-time ceiling collapsed to 27.3%, versus Weibull's 90.9% on those same engines. A uniform correction can't manufacture support a model never had.
 
-**Decision:** Weibull stays the primary deployed interval, this result *confirmed* the original Phase 6 pairing for a reason now demonstrated, not assumed. The calibrated RSF interval ships as a clearly-labeled, explicitly non-authoritative supplementary field. The export script computes the correction for every subset it builds, FD004 included (36.00 cycles), though FD004's calibrated coverage hasn't been checked on its test set.
+**Decision:** Weibull stays the primary deployed interval, this result *confirmed* the original Phase 6 pairing for a reason now demonstrated, not assumed. The calibrated RSF interval ships as a clearly-labeled, explicitly non-authoritative supplementary field. The export script computes the correction for every subset it builds, FD004 included (36.00 cycles), though FD004's calibrated coverage wasn't checked on its test set until Phase 24, which also changed the deployed interval.
 
 ---
 
@@ -290,7 +291,7 @@ This phase went through three distinct versions, which is worth tracing since it
 
 **What was built:** `.github/workflows/tests.yml` with two jobs. `unit-tests` installs `requirements.txt` on Python 3.11 and runs the whole suite on every push and pull request (model-dependent tests skip, as on a fresh clone). `live-demo-models` installs `app/requirements.txt` — exactly what Streamlit Community Cloud installs — downloads the models from the Hugging Face repo named in the `MODEL_REPO` repository variable, and runs the new `tests/test_dashboard_embedded.py`: the dashboard is started headlessly in embedded mode and makes real FD001 and FD004 predictions.
 
-**Why the second job matters:** the live demo's main failure mode is the pinned library versions drifting away from the environment that exported the uploaded models. Checked both ways before shipping: with version-matched models all 4 embedded-mode tests pass; with models exported under pandas 3, 3 of 4 fail. The suite is now 150 tests across 11 files.
+**Why the second job matters:** the live demo's main failure mode is the pinned library versions drifting away from the environment that exported the uploaded models. Checked both ways before shipping: with version-matched models all 4 embedded-mode tests pass; with models exported under pandas 3, 3 of 4 fail. The suite was then 150 tests across 11 files.
 
 ---
 
@@ -309,11 +310,29 @@ Running the checks inside the containers, rather than from the runner, is what t
 
 ---
 
-## 25. Where things stand
+## 25. Phase 24: the deployed interval, checked at the other end
 
-**Done, verified with real execution:** the full survival-analysis framing and censoring argument; the complete model ladder (Cox → Weibull → RSF → two deep-learning architectures), each addition justified by the previous model's diagnostics; domain-appropriate evaluation (NASA score primary, RMSE secondary); 5-fold cross-validation confirming the ranking isn't a single-split artifact; generalization checks across three additional dataset subsets; hyperparameter tuning validated against both CV and the real official test set; a conformal-prediction fix for RSF's interval coverage, validated by subgroup rather than trusted in aggregate; the Phase 8/9 feature-scope leak, measured rather than left as a documented assumption; a properly separated two-service HTTP architecture, fresh-clone verified end to end (install → export → serve → test, from nothing); a full correctness review (Phase 18) with every notebook re-run; the survival framing tested under simulated censoring, with a mixed result reported as measured (Phase 20); a short README with results first and a full technical report (Phase 21); a redesigned dashboard live at [https://jetengines-rul.streamlit.app/](https://jetengines-rul.streamlit.app/) (Phase 19); 150 tests across 11 files run by GitHub Actions (Phase 22); both Docker images built and smoke-tested in CI (Phase 23); and a README, project brief and architecture walkthrough that match the actual current state rather than the original plan.
+**What prompted it:** a review flagged that FD004's calibrated RSF interval had never been checked on its test set. Closing that took one evaluation, not retraining: `notebooks/14_interval_coverage_check.ipynb` scored every official test engine through the deployed `inference.predict`, with FD001 as a reproduction check (it matched notebook 12 exactly).
+
+**The gap itself:** FD004's calibrated RSF interval reached 87.9% overall but only by widening everything (122.6 cycles vs Weibull's 98.8), and it covered 55% of engines above the cap. It stays supplementary.
+
+**The real finding:** breaking coverage down by true remaining life showed the *deployed* Weibull interval covered only 58% (FD001) and 54% (FD004) of engines within 25 cycles of failure, and every miss promised more life than the engine had. Phase 14 had checked the long-lived end and kept Weibull for it; nobody had checked the short end, where a late call matters most. Phase 14's calibration couldn't have seen it either: it scored engines between 30% and 90% of their life.
+
+**The fix, selected without the test set:** `interval_calibration.py` scores each training engine at 10 points across 30–99% of its life with fold models that never saw it, and `notebooks/15_interval_fix.ipynb` compares six candidate intervals (Weibull, calibrated RSF, per-band "Mondrian" conformal corrections, and hybrids) with corrections cross-fitted across engine halves. The rule (≥ 88% coverage overall and ≥ 85% near failure on both subsets, then narrowest) picked the hybrid with no correction: lower bound = the more cautious of RSF's and Weibull's, upper bound = Weibull's.
+
+**Confirmed on the test sets:** near-failure coverage 58% → 100% (FD001) and 54% → 94% (FD004); overall 89.0% → 97.0% and 80.6% → 88.7%; dangerous misses 8 → 0 and 23 → 3; about one cycle wider on average. Above-cap coverage is unchanged (FD004 73%), since the upper bound is the same.
+
+**Deployment:** no retraining and no re-upload. The interval is computed from the already-exported models; the export now records it in the metadata, and `inference.py` serves it by default for older bundles, so the live demo picked it up with the code change alone. The API also returns Weibull's own interval (`weibull_interval_90`). 13 new tests; the suite is now 163 tests across 12 files.
+
+**Caveat, stated in the notebook:** the test sets had already been used to find the problem, so the confirmation isn't fully independent; the out-of-fold results are the main evidence.
+
+---
+
+## 26. Where things stand
+
+**Done, verified with real execution:** the full survival-analysis framing and censoring argument; the complete model ladder (Cox → Weibull → RSF → two deep-learning architectures), each addition justified by the previous model's diagnostics; domain-appropriate evaluation (NASA score primary, RMSE secondary); 5-fold cross-validation confirming the ranking isn't a single-split artifact; generalization checks across three additional dataset subsets; hyperparameter tuning validated against both CV and the real official test set; a conformal-prediction fix for RSF's interval coverage, validated by subgroup rather than trusted in aggregate; the Phase 8/9 feature-scope leak, measured rather than left as a documented assumption; a properly separated two-service HTTP architecture, fresh-clone verified end to end (install → export → serve → test, from nothing); a full correctness review (Phase 18) with every notebook re-run; the survival framing tested under simulated censoring, with a mixed result reported as measured (Phase 20); a short README with results first and a full technical report (Phase 21); a redesigned dashboard live at [https://jetengines-rul.streamlit.app/](https://jetengines-rul.streamlit.app/) (Phase 19); 163 tests across 12 files run by GitHub Actions (Phase 22); both Docker images built and smoke-tested in CI (Phase 23); the deployed interval checked by subgroup at both ends of the remaining-life range, with a near-failure fix selected on training data (Phase 24); and a README, project brief and architecture walkthrough that match the actual current state rather than the original plan.
 
 **Genuinely outstanding — everything left, and nothing more:**
 
 - The public demo runs in one process (embedded mode), not as the two-service deployment — a free-hosting constraint (Phase 19). Its models must be re-uploaded to the Hugging Face repo after every re-export, with `app/requirements.txt`'s pins kept in step.
-- FD004 hasn't been independently tuned — it inherits FD001's hyperparameters — and its conformal correction (36.00 cycles) is computed but its coverage on FD004's test set hasn't been checked. A stated time-budget decision, not a technical blocker.
+- FD004 reuses FD001's hyperparameters by design (a transfer test). Its interval covers 73% of test engines above the 125-cycle cap — safe-side misses that calibration can't fix; a model trained without the cap would be the next step.

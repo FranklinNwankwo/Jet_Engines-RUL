@@ -66,7 +66,7 @@ from lifelines import WeibullAFTFitter
 from sklearn.model_selection import GroupKFold
 from sklearn.preprocessing import StandardScaler
 
-from . import conformal, cross_validation, data_loading, features, labeling, models
+from . import conformal, cross_validation, data_loading, features, interval_calibration, labeling, models
 
 logger = logging.getLogger(__name__)
 
@@ -257,6 +257,10 @@ def build_and_save(subset: str, data_dir: Path, processed_dir: Path, models_dir:
         "rsf_min_samples_leaf": min_samples_leaf,
         "rsf_row_stride": row_stride,
         "rsf_interval_correction": rsf_interval_correction,
+        # The served 90% interval (Phase 24, notebooks/15_interval_fix.ipynb):
+        # lower bound = min(RSF, Weibull) lower bound, upper bound = Weibull.
+        # Selected on out-of-fold training data; needs no fitted correction.
+        "interval": interval_calibration.IntervalCalibration(base="hybrid", mode="none").to_dict(),
         "recommended_min_history_cycles": 30,
     }
     with open(subset_models_dir / "deployment_metadata.json", "w") as f:
