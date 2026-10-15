@@ -1,0 +1,104 @@
+# Retraining with a champion/challenger gate (operations layer, part 3).
+#
+# Run it from the Actions tab: "retrain" -> "Run workflow". It
+#   1. retrains a challenger on GitHub's machine, with the live demo's pinned
+#      library versions (app/requirements.txt), so a promoted model can be
+#      served without a version mismatch;
+#   2. compares the challenger's test metrics with the champion's -- the
+#      manifest published on Hugging Face -- using the rules in
+#      src/turbofan_rul/gate.py, and writes the comparison to the run summary;
+#   3. publishes the challenger to Hugging Face (tagged with its version) only
+#      if it passed AND "publish" was ticked.
+# A rejected challenger fails the run. Promoting a published version to the
+# live demo stays a deliberate manual step: set MODEL_REVISION to its tag.
+#
+# Needs repository variable MODEL_REPO (already used by tests.yml), and, for
+# publishing only, a repository secret HF_TOKEN with write access.
+name: retrain
+
+on:
+  workflow_dispatch:
+    inputs:
+      subset:
+        description: Subset to retrain
+        type: choice
+        options: [FD001, FD004]
+        default: FD001
+      rsf_min_samples_leaf:
+        description: RSF leaf size (blank = the deployed recipe)
+        type: string
+        default: ""
+      train_fraction:
+        description: Fraction of training engines to use (1.0 = all; lower rehearses data loss)
+        type: string
+        default: "1.0"
+      champion_revision:
+        description: Hugging Face tag or commit of the champion (blank = MODEL_REVISION variable, else main)
+        type: string
+        default: ""
+      publish:
+        description: Publish the challenger to Hugging Face if it passes the gate
+        type: boolean
+        default: false
+
+concurrency:
+  group: retrain-${{ inputs.subset }}
+  cancel-in-progress: false
+
+jobs:
+  retrain:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      PYTHONPATH: src
+      MODEL_REPO: ${{ vars.MODEL_REPO }}
+      SUBSET: ${{ inputs.subset }}
+      LEAF: ${{ inputs.rsf_min_samples_leaf }}
+      FRACTION: ${{ inputs.train_fraction }}
+      CHAMPION_REVISION: ${{ inputs.champion_revision || vars.MODEL_REVISION }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: app/requirements.txt
+
+      - name: Install the live demo's pinned libraries
+        run: pip install -r app/requirements.txt
+
+      - name: Train the challenger
+        run: |
+          ARGS="--subset $SUBSET --models-dir models_challenger --train-fraction $FRACTION"
+          if [ -n "$LEAF" ]; then ARGS="$ARGS --rsf-min-samples-leaf $LEAF"; fi
+          python -m turbofan_rul.export_deployment_artifacts $ARGS
+
+      - name: Gate -- challenger vs. champion
+        run: |
+          REV_ARG=""
+          if [ -n "$CHAMPION_REVISION" ]; then REV_ARG="--champion-revision $CHAMPION_REVISION"; fi
+          python -m turbofan_rul.gate --subset "$SUBSET" --challenger-dir models_challenger \
+            --champion-repo "$MODEL_REPO" $REV_ARG \
+            --decision-file decision.json --summary-file "$GITHUB_STEP_SUMMARY"
+
+      - name: Keep the decision and the challenger's manifest
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gate-${{ inputs.subset }}-${{ github.run_number }}
+          path: |
+            decision.json
+            models_challenger/*/manifest.json
+            models_challenger/*/deployment_metadata.json
+            models_challenger/*/drift_reference.json
+          if-no-files-found: warn
+
+      - name: Publish the challenger
+        if: success() && inputs.publish
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: |
+          python -m turbofan_rul.publish --repo "$MODEL_REPO" --subset "$SUBSET" \
+            --models-dir models_challenger --full
+          echo "Published. To serve it on the live demo, set MODEL_REVISION to the tag above." >> "$GITHUB_STEP_SUMMARY"

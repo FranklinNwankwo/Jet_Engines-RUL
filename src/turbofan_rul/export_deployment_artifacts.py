@@ -57,6 +57,7 @@ Run with: python -m turbofan_rul.export_deployment_artifacts [--subset FD001|FD0
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import json
 import logging
 from pathlib import Path
@@ -188,12 +189,29 @@ def _calibrate_rsf_interval(train_for_labeling, kept_sensors: list[str], min_sam
     return conformal.conformal_correction(scores, alpha=alpha)
 
 
-def build_and_save(subset: str, data_dir: Path, processed_dir: Path, models_dir: Path) -> None:
+def build_and_save(subset: str, data_dir: Path, processed_dir: Path, models_dir: Path,
+                   rsf_min_samples_leaf: int | None = None, train_fraction: float = 1.0,
+                   train_seed: int = 0) -> None:
+    """Fit and save one subset's deployment bundle.
+
+    The defaults reproduce the deployed recipe. `rsf_min_samples_leaf` and
+    `train_fraction` exist for building *challengers* for the retraining gate
+    (gate.py): a different leaf size, or training on a random fraction of the
+    engines (e.g. to rehearse a data-loss incident). Both are recorded in the
+    metadata, and so in the manifest."""
+    if not 0 < train_fraction <= 1:
+        raise ValueError("train_fraction must be in (0, 1]")
     subset_models_dir = models_dir / subset.lower()
     subset_models_dir.mkdir(parents=True, exist_ok=True)
 
     data_loading.download_cmapss(subset, data_dir=data_dir)
     cmapss = data_loading.load_subset(subset, data_dir=data_dir)
+    if train_fraction < 1:
+        units = np.sort(cmapss.train.unit_number.unique())
+        keep = np.random.default_rng(train_seed).choice(units, size=max(2, round(train_fraction * len(units))),
+                                                        replace=False)
+        cmapss = dataclasses.replace(cmapss, train=cmapss.train[cmapss.train.unit_number.isin(keep)].copy())
+        logger.info("Training on %d of %d engines (train_fraction=%.2f)", len(keep), len(units), train_fraction)
 
     uses_clustering = subset in REGIME_CLUSTERED_SUBSETS
     if uses_clustering:
@@ -232,7 +250,7 @@ def build_and_save(subset: str, data_dir: Path, processed_dir: Path, models_dir:
     models.save_model(weibull_model, subset_models_dir / "weibull_aft.joblib")
 
     row_stride = ROW_STRIDE_BY_SUBSET.get(subset, 3)
-    min_samples_leaf = RSF_MIN_SAMPLES_LEAF_BY_SUBSET.get(subset, 30)
+    min_samples_leaf = rsf_min_samples_leaf or RSF_MIN_SAMPLES_LEAF_BY_SUBSET.get(subset, 30)
     rsf_model = models.fit_random_survival_forest(
         train_survival, full_feature_cols, row_stride=row_stride,
         min_samples_leaf=min_samples_leaf, duration_eps=DURATION_EPS, random_state=RANDOM_STATE,
@@ -256,6 +274,8 @@ def build_and_save(subset: str, data_dir: Path, processed_dir: Path, models_dir:
         "uses_regime_clustering": uses_clustering,
         "rsf_min_samples_leaf": min_samples_leaf,
         "rsf_row_stride": row_stride,
+        "training_engines": int(cmapss.train.unit_number.nunique()),
+        "train_fraction": train_fraction,
         "rsf_interval_correction": rsf_interval_correction,
         # The served 90% interval (Phase 24, notebooks/15_interval_fix.ipynb):
         # lower bound = min(RSF, Weibull) lower bound, upper bound = Weibull.
@@ -286,11 +306,21 @@ if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
     parser = argparse.ArgumentParser()
     parser.add_argument("--subset", default="FD001", choices=["FD001", "FD004"])
+    parser.add_argument("--models-dir", default="models",
+                        help="where to write <subset>/ (use e.g. models_challenger for the retraining gate)")
+    parser.add_argument("--rsf-min-samples-leaf", type=int, default=None,
+                        help="override the deployed RSF leaf size (challenger experiments)")
+    parser.add_argument("--train-fraction", type=float, default=1.0,
+                        help="train on a random fraction of the engines (challenger experiments)")
+    parser.add_argument("--train-seed", type=int, default=0)
     args = parser.parse_args()
 
     build_and_save(
         subset=args.subset,
         data_dir=Path("data/raw"),
         processed_dir=Path("data/processed"),
-        models_dir=Path("models"),
+        models_dir=Path(args.models_dir),
+        rsf_min_samples_leaf=args.rsf_min_samples_leaf,
+        train_fraction=args.train_fraction,
+        train_seed=args.train_seed,
     )

@@ -7,7 +7,7 @@
 - **Headline result:** the Random Survival Forest wins on NASA's official FD001 test set — **test C-index 0.864, mean error 11.3 cycles, NASA score 4.0 per engine**, a NASA score 2.8× better than Weibull's and 3.6× better than Cox's. The lead holds across 5-fold cross-validation and on the harder FD004 subset.
 - **Deployed:** RSF gives the prediction; the 90% interval combines RSF and Weibull AFT (lower bound = the more cautious of RSF's and Weibull's, upper bound = Weibull's), because each model's interval fails at one end of the remaining-life range. Served by a FastAPI service and a Streamlit dashboard.
 - **Tested the premise:** with simulated censoring, survival models clearly beat a regression that treats unfinished engines as failed — but a regression that drops them was competitive, a result reported as found.
-- **Engineering:** shared `src/` package, reproducible export script, 163 tests run by GitHub Actions on every push (including a check of the live demo's models), Docker images built and smoke-tested in CI, live demo.
+- **Engineering:** shared `src/` package, reproducible export script, 209 tests run by GitHub Actions on every push (including a check of the live demo's models), Docker images built and smoke-tested in CI, versioned models, drift monitoring and a champion/challenger retraining gate, live demo.
 
 ![Dashboard](docs/images/dashboard.png)
 
@@ -100,7 +100,7 @@ pip install -r requirements.txt
 export PYTHONPATH=src                       # PowerShell: $env:PYTHONPATH = "src"
 python -m turbofan_rul.export_deployment_artifacts --subset FD001
 python -m turbofan_rul.export_deployment_artifacts --subset FD004   # optional
-pytest tests/ -v                            # 163 tests
+pytest tests/ -v                            # 209 tests
 
 # Dashboard against the API (two terminals):
 uvicorn api.main:app --reload
@@ -113,20 +113,23 @@ MODELS_DIR=models streamlit run app/streamlit_app.py
 docker compose up --build
 ```
 
-The notebooks in `notebooks/` run in order, `01_eda` through `16_uncapped_upper_bound`.
+The notebooks in `notebooks/` run in order, `01_eda` through `17_drift_monitoring`.
 
 **CI.** `.github/workflows/tests.yml` runs the test suite on every push. A second job installs exactly what the live demo installs (`app/requirements.txt`, Python 3.11), downloads the models from Hugging Face and runs the dashboard in embedded mode with real predictions (`tests/test_dashboard_embedded.py`), so a library-version mismatch with the uploaded models fails CI instead of the live site. It needs one repository variable: **Settings → Secrets and variables → Actions → Variables → `MODEL_REPO`** = your Hugging Face model repo. To run the embedded-mode test locally, set `MODELS_DIR=models` (or `MODEL_REPO`) before `pytest`.
 
 **Docker CI.** `.github/workflows/docker.yml` builds both images with `docker compose`, starts them, and runs `scripts/docker_smoke_test.py` inside each container: the API must serve FD001 and FD004 predictions in the expected range (and reject a bad request with 422), and the dashboard must reach the API over the Compose network and make a prediction through it. It runs weekly, on demand, and on pushes that change anything inside the images (about 9 minutes, most of it the in-image model export).
+
+**Operations.** Each exported model carries a `manifest.json` with a version derived from its files (e.g. `fd001-3328802d81b0`), the git commit, data hashes, library versions and test-set metrics; the API and dashboard report which version answered, and `python -m turbofan_rul.publish` uploads and tags versions on Hugging Face (the live demo is pinned to one with `MODEL_REVISION`). The API's `GET /drift` compares the last 500 requests with a training reference (PSI, thresholds calibrated on training engines): replays show no false alarms on FD001's and FD004's own fleets and immediate alarms for FD002 and FD003 traffic ([notebook 17](notebooks/17_drift_monitoring.ipynb)). `.github/workflows/retrain.yml` retrains a challenger, compares it with the published champion on fixed rules (`gate.py`) and publishes it only if it passes; a challenger trained on 30% of the engines was rejected (NASA score 13% worse).
 
 ---
 
 ## 5. Repository
 
 ```
-├── notebooks/            # 01 EDA → 12 interval calibration → 13 censoring experiment → 14–15 interval fix → 16 uncapped upper bound
-├── src/turbofan_rul/     # data loading, labeling, features, models, evaluation, CV, conformal, inference, export
-├── tests/                # 163 tests (GitHub Actions: .github/workflows/tests.yml)
+├── notebooks/            # 01 EDA → 12 interval calibration → 13 censoring experiment → 14–15 interval fix → 16 uncapped upper bound → 17 drift
+├── src/turbofan_rul/     # data loading, labeling, features, models, evaluation, CV, conformal, inference, export,
+│                         #   operations: manifest (versions), drift, gate (retraining), publish (Hugging Face)
+├── tests/                # 209 tests (GitHub Actions: .github/workflows/tests.yml; retraining: retrain.yml)
 ├── scripts/              # Docker smoke test (GitHub Actions: .github/workflows/docker.yml)
 ├── api/                  # FastAPI service + Dockerfile
 ├── app/                  # Streamlit dashboard, Community Cloud requirements, Dockerfile
@@ -143,7 +146,8 @@ The notebooks in `notebooks/` run in order, `01_eda` through `16_uncapped_upper_
 - **Long-lived engines on FD004.** The interval covers 73% of FD004 test engines with more than 125 cycles left. These misses are on the safe side (the engine outlives the interval). An upper bound from an RSF trained without the 125-cycle cap reaches 100%, but makes intervals for healthy engines much wider and adds about 200 MB of models; it was measured and deliberately not deployed ([notebook 16](notebooks/16_uncapped_upper_bound.ipynb)). Without the cap, the *point estimate* gets worse (RMSE 24.4 → 28.0 out of fold on FD001), so the cap stays.
 - **Censoring convention.** Training labels treat rows beyond the 125-cycle cap as failures at 125, the standard convention. Censoring those rows instead broke the Weibull model, so it was rejected.
 - **The survival-vs-regression evidence comes from simulated censoring** on FD001, with untuned regressors.
-- **The live demo runs in one process** (embedded mode), not as two services. This is a free-hosting constraint.
+- **The live demo runs in one process** (embedded mode), not as two services. This is a free-hosting constraint, and it means `/drift` exists only in the API deployment.
+- **Operations are demonstrated, not battle-tested.** Drift is shown on replayed fleets (there is no live traffic), its window lives in memory and resets on restart, and the retraining gate judges challengers on the official test set, which is fine for a no-worse-than check but must not be used to pick between many challengers.
 
 ---
 

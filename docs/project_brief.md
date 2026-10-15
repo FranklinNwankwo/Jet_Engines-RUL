@@ -140,7 +140,8 @@ All models are compared in comparison tables across every axis above; the deploy
 - **Frontend.** **Streamlit** (`app/streamlit_app.py`), not Gradio as originally planned — switched on request. Two modes: in the Docker deployment it is a **pure HTTP client** of the API (no model code imported; API address via `API_BASE_URL`); for the public demo it runs in **embedded mode**, downloading the exported models from a Hugging Face model repo (`MODEL_REPO`) and calling the same `inference.predict` the API uses, so predictions are identical in both modes. Engine selection or CSV upload (with a downloadable example file), predicted RUL / 90% interval / colour-coded risk level, a chart placing the prediction and intervals against risk zones, and per-sensor trend charts; themed via `.streamlit/config.toml`.
 - **Public demo (added, not in the original plan).** Live at [jetengines-rul.streamlit.app](https://jetengines-rul.streamlit.app/) on Streamlit Community Cloud, which can only host a Streamlit app — hence embedded mode rather than the two-service layout. Free hosts for a separate API were checked and ruled out (Hugging Face Docker Spaces now need a paid plan; Render's free tier is too small for the ~340MB of models; Cloud Run needs a billing card). Because the models are pickled, `app/requirements.txt` — the file Community Cloud installs — pins scikit-learn, scikit-survival, lifelines, numpy, pandas, scipy and joblib to the export environment's exact versions, on Python 3.11.
 - **Containerization (added, not in the original plan).** Separate Dockerfiles for the API (`api/Dockerfile`, bakes the FD001 and FD004 models in at build time) and the dashboard (`app/Dockerfile`, deliberately dependency-light since it holds no model code), plus `docker-compose.yml` for local orchestration. **Built and smoke-tested in CI.** The sandboxed development environment blocked container registries, so the images are built on GitHub Actions (`.github/workflows/docker.yml`): both images are built and started with Docker Compose, and `scripts/docker_smoke_test.py` runs inside each container — real FD001 and FD004 predictions from the API, and a dashboard prediction made through the API over the Compose network. Runs weekly, on demand, and on pushes that change the images; the first run passed.
-- **Testing.** 163 tests across 12 files (`tests/`), covering feature engineering, labeling, models, RSF prediction, deep-survival helpers, evaluation, cross-validation, regime clustering, conformal calibration, interval selection, and inference. Beyond the unit tests, the API was checked end to end over real HTTP (including rejection of NaN/infinite inputs with a clean 422), and the dashboard was run headlessly (Streamlit `AppTest` plus browser screenshots at desktop and phone widths) in both modes for FD001, FD004, and the API-down case, giving identical predictions in both. Embedded mode is covered by `tests/test_dashboard_embedded.py`, which GitHub Actions runs against the live demo's Hugging Face models with the demo's pinned dependencies.
+- **Operations (added, not in the original plan).** Versioned models (`manifest.py`: content-derived version, provenance, test metrics; reported by the API and dashboard; published and tagged on Hugging Face by `publish.py`, with the live demo pinned to a tag), input drift monitoring in the API (`drift.py`, `GET /drift`, PSI with thresholds calibrated on training engines, demonstrated on replayed fleets in `notebooks/17_drift_monitoring.ipynb`), and a champion/challenger retraining gate (`gate.py`, `.github/workflows/retrain.yml`) that publishes a retrained model only if it is no worse on four fixed rules; a challenger trained on 30% of the engines was rejected.
+- **Testing.** 209 tests across 16 files (`tests/`), covering feature engineering, labeling, models, RSF prediction, deep-survival helpers, evaluation, cross-validation, regime clustering, conformal calibration, interval selection, inference, versioning, publishing, drift monitoring and the retraining gate. Beyond the unit tests, the API was checked end to end over real HTTP (including rejection of NaN/infinite inputs with a clean 422), and the dashboard was run headlessly (Streamlit `AppTest` plus browser screenshots at desktop and phone widths) in both modes for FD001, FD004, and the API-down case, giving identical predictions in both. Embedded mode is covered by `tests/test_dashboard_embedded.py`, which GitHub Actions runs against the live demo's Hugging Face models with the demo's pinned dependencies.
 
 ---
 
@@ -167,7 +168,8 @@ turbofan-rul/
 │   ├── 13_censoring_experiment.ipynb           # added: survival vs. regression under simulated censoring
 │   ├── 14_interval_coverage_check.ipynb        # added: deployed intervals by subgroup (FD001 + FD004)
 │   ├── 15_interval_fix.ipynb                   # added: near-failure fix, selected on training data
-│   └── 16_uncapped_upper_bound.ipynb           # added: training without the cap — measured, not deployed
+│   ├── 16_uncapped_upper_bound.ipynb           # added: training without the cap — measured, not deployed
+│   └── 17_drift_monitoring.ipynb               # added: drift monitor replayed on FD001-FD004 fleets
 ├── src/turbofan_rul/
 │   ├── data_loading.py                 # all 4 subsets, not just FD001
 │   ├── features.py                     # rolling stats, trends, health index, regime clustering
@@ -180,6 +182,8 @@ turbofan-rul/
 │   ├── conformal.py                    # added: cross-conformal interval calibration
 │   ├── interval_calibration.py         # added: out-of-fold interval candidates + the served interval
 │   ├── inference.py                    # added: single scoring function (API + dashboard embedded mode)
+│   ├── manifest.py, publish.py         # added: model versions + Hugging Face publishing
+│   ├── drift.py, gate.py               # added: drift monitoring + retraining gate
 │   └── export_deployment_artifacts.py  # added: reproducible artifact build script
 ├── api/
 │   ├── main.py                         # FastAPI: /predict, /subsets, /subsets/{s}/metadata
@@ -194,7 +198,7 @@ turbofan-rul/
 ├── requirements-api.txt                # added: lean, API-only
 ├── requirements-app.txt                # added: leaner still, zero ML dependencies
 ├── .dockerignore                       # added
-├── tests/                              # 163 tests across 12 files
+├── tests/                              # 209 tests across 16 files
 ├── models/
 │   ├── fd001/                          # RSF + Weibull + metadata, tuned + calibrated
 │   └── fd004/                          # RSF + Weibull + regime-clustering artifacts
@@ -220,13 +224,14 @@ Notebooks are used for exploration, derivation, and reporting. Any logic the API
 6. A deployed FastAPI + **Streamlit** (not Gradio) application returning RUL, confidence interval, and risk flag — done, as two separate HTTP services, containerized and smoke-tested in CI, with a public live demo at [jetengines-rul.streamlit.app](https://jetengines-rul.streamlit.app/).
 7. A README presenting the project — done: a short summary with results at a glance, key findings and the live link, with the full methods and results moved to `docs/technical_report.md`.
 
-**Beyond the original scope:** 5-fold cross-validation, generalization checks on FD002/FD003/FD004, hyperparameter tuning validated on the official test set, conformal interval calibration, a near-failure fix for the deployed interval, Docker containerization, and a themed public demo on Streamlit Community Cloud.
+**Beyond the original scope:** 5-fold cross-validation, generalization checks on FD002/FD003/FD004, hyperparameter tuning validated on the official test set, conformal interval calibration, a near-failure fix for the deployed interval, Docker containerization, a themed public demo on Streamlit Community Cloud, and an operations layer (model versioning, drift monitoring, a retraining gate).
 
 ---
 
 ## 10. Known Gaps
 
 - **FD004 reuses FD001's tuned hyperparameters by design** — it tests whether the FD001 recipe transfers without re-tuning.
+- **The operations layer is demonstrated, not battle-tested.** Drift is shown on replayed fleets, its 500-request window lives in the API's memory and resets on restart, and it only exists in the API deployment (the live demo has no API). The retraining gate judges on the official test set, fine for a no-worse-than check but not for choosing among many challengers.
 - **FD004's interval under-covers long-lived engines.** 73% of FD004 test engines with more than 125 cycles left are covered (target 90%). The misses are on the safe side (the engine outlives the interval), and no calibration candidate in notebook 15 fixed them, because they share Weibull's upper bound. An upper bound from an RSF trained without the cap does fix them (100% on the test set), but was deliberately not deployed — see Section 6, item 10.
 - **Training labels keep `event=1` at the 125-cycle cap.** The censored alternative was tested and rejected because it breaks the deployed Weibull interval (Section 4); the labels are therefore a convention, not an exact description of those rows.
 - **A cross-validation bug was found and fixed late.** `features.add_ewm_features` used `groupby().apply` plus `reset_index`, which misaligned EWM features on any frame whose row index wasn't 0..n-1 — every CV fold, though not the full training frame or the deployed model. It affected only RSF's CV and tuning numbers (Cox/Weibull use no EWM features); all affected notebooks were re-run after the fix, and the main change was that the leaf=5 tuning result went from looking like a 4-of-5-fold winner to 2 of 5.

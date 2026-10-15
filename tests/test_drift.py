@@ -116,3 +116,12 @@ def test_monitor_uses_reference_thresholds():
     for v in RNG.normal(1.5, 1, 300):
         m.update(pd.Series({"x": v}))
     assert m.report()["status"] == "stable" and m.report()["thresholds"] == {"warning": 5.0, "drift": 9.0}
+
+
+def test_calibration_falls_back_to_textbook_for_tiny_fleets():
+    rng = np.random.default_rng(3)
+    rows = [(u, c, rng.normal()) for u in range(1, 7) for c in range(1, 101)]
+    raw = pd.DataFrame(rows, columns=["unit_number", "time_cycles", "x"])
+    t = drift.calibrate_thresholds(raw, raw[["unit_number", "time_cycles"]], ["x"], n_splits=2)
+    assert (t["warning"], t["drift"]) == (drift.WARNING_PSI, drift.DRIFT_PSI)
+    assert t["calibration"]["n_windows"] == 0

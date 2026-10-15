@@ -302,6 +302,10 @@ turbofan-rul/
 │   ├── interval_calibration.py        # out-of-fold interval candidates, Mondrian calibration, the served interval
 │   ├── evaluation.py                  # NASA score, C-index, calibration
 │   ├── inference.py                   # single scoring function -- the API and the dashboard's embedded mode
+│   ├── manifest.py                    # content-derived model versions + provenance + test metrics
+│   ├── drift.py                       # input drift monitor (PSI, calibrated thresholds)
+│   ├── gate.py                        # champion/challenger retraining gate
+│   ├── publish.py                     # upload + tag versions on Hugging Face
 │   └── export_deployment_artifacts.py # reproducible artifact build, per subset (see below)
 ├── api/
 │   ├── main.py                        # FastAPI — POST /predict, GET /subsets, GET /subsets/{s}/metadata
@@ -314,7 +318,7 @@ turbofan-rul/
 ├── docker-compose.yml                 # local two-service orchestration
 ├── requirements-api.txt               # lean, API-only deps (no jupyter/matplotlib/tensorflow)
 ├── requirements-app.txt               # leaner still -- streamlit + pandas + requests, nothing ML
-├── tests/                             # 163 tests across 12 files
+├── tests/                             # 209 tests across 16 files
 └── models/
     ├── fd001/                         # RSF + Weibull + metadata for FD001
     └── fd004/                         # RSF + Weibull + regime-clustering artifacts for FD004
@@ -329,7 +333,7 @@ python -m turbofan_rul.export_deployment_artifacts --subset FD004   # optional -
 uvicorn api.main:app --reload                          # API on :8000
 API_BASE_URL=http://localhost:8000 streamlit run app/streamlit_app.py   # dashboard on :8501 (HTTP mode)
 MODELS_DIR=models streamlit run app/streamlit_app.py                    # or: no API, models loaded in-app
-pytest tests/ -v                                       # 163 tests
+pytest tests/ -v                                       # 209 tests
 
 # Containerized, both services:
 docker compose up --build
@@ -348,6 +352,23 @@ docker compose up --build
 **Verified in CI.** The development sandbox blocked container registries, so the images are built on GitHub Actions instead (`.github/workflows/docker.yml`): `docker compose build`, `docker compose up --wait` (which waits on the API's healthcheck), then `scripts/docker_smoke_test.py` run inside each container. In the API container it checks that `/health` lists FD001 and FD004, that test engine 1 of each subset gets a prediction in the expected range with an ordered 90% interval (FD001 121 cycles [52, 237]; FD004 33 [13, 59] — the same numbers as embedded mode), and that an empty request is rejected with 422. In the dashboard container it checks that the API is reachable at `http://api:8000` over the Compose network, then runs the real dashboard headlessly (Streamlit `AppTest`) in HTTP mode and makes a prediction through the API — proving the two services work together, not just that each starts. The first run passed in about 9 minutes, most of it the FD001 and FD004 exports inside the API image build. The job runs weekly, on demand, and on any push that changes what goes into the images.
 
 **Framework note:** deep survival modeling in Phase 7 uses `tensorflow-cpu` rather than PyTorch — PyPI's default `torch` package bundles several GB of CUDA dependencies that exceeded the sandboxed build environment's disk, and the official CPU-only wheel index is outside its network allowlist. `tensorflow-cpu` is a genuine CPU-only build. This was an environment constraint, not a framework preference; a normal environment would just `pip install torch`. (Not relevant to the deployed containers above — neither image installs tensorflow at all, since Phase 7 was never a deployment candidate.)
+
+### Operations: versions, drift and a retraining gate
+
+**Versioning (`manifest.py`, `publish.py`).** Every export writes `models/<subset>/manifest.json`: a `model_version` derived from the SHA-256 of the files that determine predictions (so identical models get the same version and any change gets a new one), the git commit, the training-data hashes, library versions, training settings, and test-set metrics measured through `inference.predict`. Loading re-hashes the files and reports the version only if they still match, so a rebuilt model can't borrow an old version. `/health`, `/predict` and the dashboard sidebar report it. `python -m turbofan_rul.publish` checks the large files against the SHA-256 Hugging Face stores, uploads only what differs, and tags the commit with each version; the live demo is pinned with `MODEL_REVISION`. The first publish found that refitting Weibull changes its pickle (lifelines stores the fit time) while RSF stays byte-identical, so only ~2 MB had to be uploaded.
+
+**Drift monitoring (`drift.py`, notebook 17).** The API keeps the last 500 requests per model and compares the operating settings and each sensor's 15-cycle rolling mean with a reference saved at export, using the Population Stability Index (worst feature sets the status; `GET /drift`). Three traps from the first run shaped the design: a full-life reference made FD001's own test fleet look drifted (test engines are healthier on average, and sensors track wear), so the reference uses training engines observed partway through life; replaying from an empty fleet made windows single-age, so replays use a steady-state fleet; and the textbook 0.1 / 0.25 thresholds fired on most normal windows (correlated requests, worst of 15–20 features), so thresholds are calibrated on training engines only (half builds a reference, the other half is replayed). Final replays:
+
+| Fleet → model | Drift windows | Model on that fleet |
+|---|---|---|
+| FD001 → FD001, FD004 → FD004 | 0% | its normal accuracy |
+| FD002 → FD001 (six regimes) | 100% | RMSE 73.7, coverage 10% |
+| FD003 → FD001 (new fault mode) | 100% | RMSE 22.3, NASA 25.6 vs 4.0 |
+| FD002 → FD004 | 100% | RMSE 27.4 — fine: drift is not harm |
+
+The price of no false alarms is sensitivity: a window needs about 30% foreign requests before it fires.
+
+**Retraining gate (`gate.py`, `.github/workflows/retrain.yml`).** A run retrains a challenger on GitHub's machine with the live demo's pinned libraries, downloads the champion's manifest from Hugging Face, and applies four rules fixed in advance: NASA score per engine at most 5% worse, C-index at most 0.01 lower, interval coverage at least 85%, near-failure coverage at most 5 points lower. The challenger is published (and tagged) only if all pass and publishing was requested; making it live stays a manual change of `MODEL_REVISION`. Both outcomes were exercised: the deployed recipe retrained passed with identical metrics; a challenger trained on 30 of 100 engines was rejected on the NASA rule (4.59 vs 4.05) while its C-index and coverage passed, which is why the gate checks more than one metric. The rules use the official test set, acceptable for a no-worse-than check but not for choosing among many challengers.
 
 ---
 
@@ -371,4 +392,5 @@ Seven bugs found during the project, and how each was fixed:
 - **Phase 7 (deep survival) is a stretch phase.** It would only have been deployed if it beat RSF; it didn't.
 - **Training labels use `event=1` for every row**, including rows at the 125-cycle cap; the censored alternative was tested and rejected because it breaks the deployed Weibull interval (see [Feature engineering](#2-feature-engineering)).
 - **The survival-vs-regression comparison uses simulated censoring** (FD001, one mechanism, untuned regressors); on this data a regression that drops unfinished engines matches RSF's accuracy. See [notebook 13's section](#6-does-survival-analysis-actually-beat-regression-tested-with-a-mixed-answer).
+- **Operations are demonstrated on replays.** No live traffic exists, the drift window resets when the API restarts, and the retraining gate uses the official test set (see the Operations subsection).
 - **The public demo runs in one process** (the dashboard's embedded mode on Streamlit Community Cloud), not as the two-container deployment — a hosting constraint, documented in the Deployment section. Its models live in a Hugging Face model repo and must be re-uploaded after every re-export, with the pinned library versions kept in step.

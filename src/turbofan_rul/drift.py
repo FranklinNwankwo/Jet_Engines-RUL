@@ -184,7 +184,17 @@ def calibrate_thresholds(featured: pd.DataFrame, train_raw: pd.DataFrame, column
             columns)}
         stream_rows = _snapshots(featured, train_raw, stream_units, 1, every, min_cycle,
                                  random_state + 10 * split + 7)
-        maxima.append(window_maxima(ref, steady_state_stream(stream_rows, seed=split), window=window))
+        stream = steady_state_stream(stream_rows, seed=split)
+        if len(stream) >= window:
+            maxima.append(window_maxima(ref, stream, window=window))
+        elif len(stream) >= MIN_REQUESTS:
+            # A small fleet (e.g. a challenger trained on a fraction of the
+            # engines) can't fill a window; judge its whole stream once.
+            maxima.append(np.array([max(compare(ref, stream[columns]).values())]))
+    if not maxima:
+        return {"warning": WARNING_PSI, "drift": DRIFT_PSI,
+                "calibration": {"method": "textbook -- too few training engines to calibrate",
+                                "n_windows": 0, "window": window}}
     maxima = np.concatenate(maxima)
     return {
         "warning": round(max(WARNING_PSI, float(np.quantile(maxima, 0.95))), 4),
