@@ -65,6 +65,7 @@ from pathlib import Path
 import numpy as np
 from lifelines import WeibullAFTFitter
 from sklearn.model_selection import GroupKFold
+from sklearn.ensemble import HistGradientBoostingRegressor
 from sklearn.preprocessing import StandardScaler
 
 from . import conformal, cross_validation, data_loading, drift, features, interval_calibration, inference, labeling, manifest, models
@@ -92,6 +93,14 @@ ROW_STRIDE_BY_SUBSET = {"FD001": 3, "FD004": 15}
 # independent search -- a stated scope gap (see README), not an assumption
 # that the FD001-optimal leaf size is also FD004-optimal.
 RSF_MIN_SAMPLES_LEAF_BY_SUBSET = {"FD001": 5, "FD004": 5}
+
+# Point-estimate options (notebook 18). "blend" adds gbm.joblib to the bundle.
+POINT_MODELS = ("rsf", "blend")
+# The deployed recipe per subset. FD001's blend was selected on cross-validation
+# and passed the retraining gate (notebook 18); FD004 wasn't part of that
+# experiment, so it stays RSF-only.
+POINT_MODEL_BY_SUBSET = {"FD001": "blend", "FD004": "rsf"}
+GBM_PARAMS = {"max_iter": 300, "learning_rate": 0.05, "random_state": 0}
 
 
 def _prepare_fd001_style(subset: str, cmapss, processed_dir: Path):
@@ -191,7 +200,7 @@ def _calibrate_rsf_interval(train_for_labeling, kept_sensors: list[str], min_sam
 
 def build_and_save(subset: str, data_dir: Path, processed_dir: Path, models_dir: Path,
                    rsf_min_samples_leaf: int | None = None, train_fraction: float = 1.0,
-                   train_seed: int = 0) -> None:
+                   train_seed: int = 0, point_model: str | None = None) -> None:
     """Fit and save one subset's deployment bundle.
 
     The defaults reproduce the deployed recipe. `rsf_min_samples_leaf` and
@@ -201,6 +210,9 @@ def build_and_save(subset: str, data_dir: Path, processed_dir: Path, models_dir:
     metadata, and so in the manifest."""
     if not 0 < train_fraction <= 1:
         raise ValueError("train_fraction must be in (0, 1]")
+    point_model = point_model or POINT_MODEL_BY_SUBSET.get(subset, "rsf")
+    if point_model not in POINT_MODELS:
+        raise ValueError(f"point_model must be one of {POINT_MODELS}")
     subset_models_dir = models_dir / subset.lower()
     subset_models_dir.mkdir(parents=True, exist_ok=True)
 
@@ -257,6 +269,18 @@ def build_and_save(subset: str, data_dir: Path, processed_dir: Path, models_dir:
     )
     models.save_model(rsf_model, subset_models_dir / "rsf.joblib")
 
+    # Optional blended point estimate (notebooks/18_point_estimate_candidates.ipynb):
+    # the average of RSF's RMST and a gradient-boosted regressor on the same
+    # capped target and features. Selected on cross-validation by NASA score
+    # for FD001; the interval is unchanged (it never uses the point estimate).
+    gbm_path = subset_models_dir / "gbm.joblib"
+    if point_model == "blend":
+        sub = train_survival.iloc[::row_stride]
+        gbm = HistGradientBoostingRegressor(**GBM_PARAMS).fit(sub[full_feature_cols], sub["duration"])
+        models.save_model(gbm, gbm_path)
+    elif gbm_path.exists():
+        gbm_path.unlink()   # a stale blend member must never be picked up by an RSF-only bundle
+
     logger.info("Calibrating RSF interval via cross-conformal prediction (5 extra RSF fits)...")
     rsf_interval_correction = _calibrate_rsf_interval(
         train_for_labeling, kept_sensors, min_samples_leaf, row_stride,
@@ -276,6 +300,9 @@ def build_and_save(subset: str, data_dir: Path, processed_dir: Path, models_dir:
         "rsf_row_stride": row_stride,
         "training_engines": int(cmapss.train.unit_number.nunique()),
         "train_fraction": train_fraction,
+        "point_model": ({"type": "blend", "members": ["random_survival_forest", "gradient_boosting"],
+                         "weights": [0.5, 0.5], "gradient_boosting_params": GBM_PARAMS}
+                        if point_model == "blend" else {"type": "rsf"}),
         "rsf_interval_correction": rsf_interval_correction,
         # The served 90% interval (Phase 24, notebooks/15_interval_fix.ipynb):
         # lower bound = min(RSF, Weibull) lower bound, upper bound = Weibull.
@@ -313,6 +340,9 @@ if __name__ == "__main__":
     parser.add_argument("--train-fraction", type=float, default=1.0,
                         help="train on a random fraction of the engines (challenger experiments)")
     parser.add_argument("--train-seed", type=int, default=0)
+    parser.add_argument("--point-model", default=None, choices=list(POINT_MODELS),
+                        help="rsf or blend (average of RSF and gradient boosting, notebook 18); "
+                             "default: the deployed recipe for the subset (FD001 blend, FD004 rsf)")
     args = parser.parse_args()
 
     build_and_save(
@@ -323,4 +353,5 @@ if __name__ == "__main__":
         rsf_min_samples_leaf=args.rsf_min_samples_leaf,
         train_fraction=args.train_fraction,
         train_seed=args.train_seed,
+        point_model=args.point_model,
     )

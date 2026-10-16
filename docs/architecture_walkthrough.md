@@ -31,7 +31,8 @@ This is the "how did we get here" document; every phase, what triggered it, what
 25. [Phase 24: the deployed interval, checked at the other end](#25-phase-24-the-deployed-interval-checked-at-the-other-end)
 26. [Phase 25: training without the cap, measured and not deployed](#26-phase-25-training-without-the-cap-measured-and-not-deployed)
 27. [Phase 26: the operations layer — versions, drift, retraining gate](#27-phase-26-the-operations-layer--versions-drift-retraining-gate)
-28. [Where things stand](#28-where-things-stand)
+28. [Phase 27: a better point estimate, decided by the gate](#28-phase-27-a-better-point-estimate-decided-by-the-gate)
+29. [Where things stand](#29-where-things-stand)
 
 ---
 
@@ -356,9 +357,21 @@ Running the checks inside the containers, rather than from the runner, is what t
 
 ---
 
-## 28. Where things stand
+## 28. Phase 27: a better point estimate, decided by the gate
 
-**Done, verified with real execution:** the full survival-analysis framing and censoring argument; the complete model ladder (Cox → Weibull → RSF → two deep-learning architectures), each addition justified by the previous model's diagnostics; domain-appropriate evaluation (NASA score primary, RMSE secondary); 5-fold cross-validation confirming the ranking isn't a single-split artifact; generalization checks across three additional dataset subsets; hyperparameter tuning validated against both CV and the real official test set; a conformal-prediction fix for RSF's interval coverage, validated by subgroup rather than trusted in aggregate; the Phase 8/9 feature-scope leak, measured rather than left as a documented assumption; a properly separated two-service HTTP architecture, fresh-clone verified end to end (install → export → serve → test, from nothing); a full correctness review (Phase 18) with every notebook re-run; the survival framing tested under simulated censoring, with a mixed result reported as measured (Phase 20); a short README with results first and a full technical report (Phase 21); a redesigned dashboard live at [https://jetengines-rul.streamlit.app/](https://jetengines-rul.streamlit.app/) (Phase 19); 217 tests across 16 files run by GitHub Actions (Phase 22 onwards); both Docker images built and smoke-tested in CI (Phase 23); the deployed interval checked by subgroup at both ends of the remaining-life range, with a near-failure fix selected on training data (Phase 24); training without the cap measured for both the point estimate and the upper bound, and declined on cost-benefit grounds (Phase 25); versioned models, drift monitoring and a champion/challenger retraining gate (Phase 26); and a README, project brief and architecture walkthrough that match the actual current state rather than the original plan.
+**The question, reframed:** "make RMSE better" became "improve the point estimate, judged by the NASA score first", the same priority the gate enforces, after a fair challenge that RMSE isn't this project's primary metric (it's the number papers compare).
+
+**What was built:** `notebooks/18_point_estimate_candidates.ipynb`. It breaks down the error first (11% of test engines, those above the cap, carry a quarter of RSF's squared error), then compares candidates fixed in advance on the project's cross-validation: four caps, and an RSF + gradient-boosting average, with gradient boosting alone as a reference. The rule required a ≥ 5% NASA gain, 4 of 5 folds, no loss on points ≤ 150 cycles from failure, and RMSE within 5%. That third condition was written for a predicted trap and caught it: caps 135 and 145 won overall only by predicting more life for very young engines.
+
+**A mistake caught in my own selection code:** it left gradient boosting alone among the candidates, against the written plan, and picked it. Corrected to match the plan; disclosed in the notebook.
+
+**Result:** the blend won (cross-validated NASA 69.3 vs 78.8, 4 of 5 folds), passed the pre-set test check (NASA 3.07 vs 4.05 per engine, RMSE 14.2 vs 15.6, C-index 0.877 vs 0.864), then passed the retraining gate as a real challenger, the first time the gate decided something that mattered. `export_deployment_artifacts.py` gained `--point-model`, inference averages the two members and reports both (`point_estimate_components`), and FD001's deployed recipe is now the blend; FD004 stays RSF-only.
+
+---
+
+## 29. Where things stand
+
+**Done, verified with real execution:** the full survival-analysis framing and censoring argument; the complete model ladder (Cox → Weibull → RSF → two deep-learning architectures), each addition justified by the previous model's diagnostics; domain-appropriate evaluation (NASA score primary, RMSE secondary); 5-fold cross-validation confirming the ranking isn't a single-split artifact; generalization checks across three additional dataset subsets; hyperparameter tuning validated against both CV and the real official test set; a conformal-prediction fix for RSF's interval coverage, validated by subgroup rather than trusted in aggregate; the Phase 8/9 feature-scope leak, measured rather than left as a documented assumption; a properly separated two-service HTTP architecture, fresh-clone verified end to end (install → export → serve → test, from nothing); a full correctness review (Phase 18) with every notebook re-run; the survival framing tested under simulated censoring, with a mixed result reported as measured (Phase 20); a short README with results first and a full technical report (Phase 21); a redesigned dashboard live at [https://jetengines-rul.streamlit.app/](https://jetengines-rul.streamlit.app/) (Phase 19); 224 tests across 16 files run by GitHub Actions (Phase 22 onwards); both Docker images built and smoke-tested in CI (Phase 23); the deployed interval checked by subgroup at both ends of the remaining-life range, with a near-failure fix selected on training data (Phase 24); training without the cap measured for both the point estimate and the upper bound, and declined on cost-benefit grounds (Phase 25); versioned models, drift monitoring and a champion/challenger retraining gate (Phase 26); a blended point estimate selected by NASA score and promoted by that gate (Phase 27); and a README, project brief and architecture walkthrough that match the actual current state rather than the original plan.
 
 **Genuinely outstanding — everything left, and nothing more:**
 

@@ -74,6 +74,7 @@ PREDICTION_ARTIFACTS = (
     "weibull_scaler.joblib",
     "regime_kmeans.joblib",
     "regime_norm_stats.joblib",
+    "gbm.joblib",
 )
 
 TRACKED_PACKAGES = ("numpy", "pandas", "scipy", "scikit-learn", "scikit-survival", "lifelines", "joblib")
@@ -192,6 +193,7 @@ def build_manifest(subset: str, subset_dir: Path | str, data_dir: Path | str,
             "rsf_min_samples_leaf": meta.get("rsf_min_samples_leaf"),
             "rsf_row_stride": meta.get("rsf_row_stride"),
             "training_engines": meta.get("training_engines"),
+            "point_model": meta.get("point_model", {"type": "rsf"}).get("type"),
             "train_fraction": meta.get("train_fraction", 1.0),
             "uses_regime_clustering": meta.get("uses_regime_clustering"),
             "rsf_interval_correction": meta.get("rsf_interval_correction"),

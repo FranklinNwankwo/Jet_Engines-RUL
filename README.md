@@ -4,10 +4,10 @@
 
 - **Problem:** predict how many cycles a jet engine has left before failure, from 21 sensor readings per cycle (NASA C-MAPSS), with an uncertainty interval — not just a number.
 - **Approach:** framed as survival analysis (time-to-failure), comparing Cox PH, Weibull AFT, a Random Survival Forest and two deep hazard networks.
-- **Headline result:** the Random Survival Forest wins on NASA's official FD001 test set — **test C-index 0.864, mean error 11.3 cycles, NASA score 4.0 per engine**, a NASA score 2.8× better than Weibull's and 3.6× better than Cox's. The lead holds across 5-fold cross-validation and on the harder FD004 subset.
-- **Deployed:** RSF gives the prediction; the 90% interval combines RSF and Weibull AFT (lower bound = the more cautious of RSF's and Weibull's, upper bound = Weibull's), because each model's interval fails at one end of the remaining-life range. Served by a FastAPI service and a Streamlit dashboard.
+- **Headline result:** the Random Survival Forest wins on NASA's official FD001 test set — **test C-index 0.864, mean error 11.3 cycles, NASA score 4.0 per engine**, a NASA score 2.8× better than Weibull's and 3.6× better than Cox's. The lead holds across 5-fold cross-validation and on the harder FD004 subset. Averaged with a gradient-boosting regressor, the deployed FD001 point estimate improves to **NASA 3.07 per engine, RMSE 14.2, C-index 0.877** (selected on cross-validation, promoted by the retraining gate).
+- **Deployed:** RSF gives the prediction (on FD001, averaged with gradient boosting); the 90% interval combines RSF and Weibull AFT (lower bound = the more cautious of RSF's and Weibull's, upper bound = Weibull's), because each model's interval fails at one end of the remaining-life range. Served by a FastAPI service and a Streamlit dashboard.
 - **Tested the premise:** with simulated censoring, survival models clearly beat a regression that treats unfinished engines as failed — but a regression that drops them was competitive, a result reported as found.
-- **Engineering:** shared `src/` package, reproducible export script, 217 tests run by GitHub Actions on every push (including a check of the live demo's models), Docker images built and smoke-tested in CI, versioned models, drift monitoring and a champion/challenger retraining gate, live demo.
+- **Engineering:** shared `src/` package, reproducible export script, 224 tests run by GitHub Actions on every push (including a check of the live demo's models), Docker images built and smoke-tested in CI, versioned models, drift monitoring and a champion/challenger retraining gate, live demo.
 
 ![Dashboard](docs/images/dashboard.png)
 
@@ -35,17 +35,17 @@
 | Conv1D→LSTM (deep, stretch) | 967.3 | 0.843 | 18.34 | 13.34 | 57% | 74% |
 | **Random Survival Forest** | **462.5** | **0.864** | **16.27** | **11.99** | 65% | 86% |
 
-**Deployed models** (retrained on all training engines, tuned RSF):
+**Deployed models** (retrained on all training engines; FD001's point estimate averages RSF with gradient boosting, FD004's is RSF alone):
 
 | | FD001 (1 operating regime, 1 fault mode) | FD004 (6 regimes, 2 fault modes) |
 |---|---|---|
-| RSF test C-index | 0.864 | 0.862 |
-| RSF NASA score per engine | 4.04 | 22.4 |
-| RSF MAE / RMSE (cycles) | 11.3 / 15.5 | 20.7 / 28.2 |
+| Test C-index | 0.877 (RSF alone 0.864) | 0.862 |
+| NASA score per engine | 3.07 (RSF alone 4.05) | 22.4 |
+| MAE / RMSE (cycles) | 10.4 / 14.2 (RSF alone 11.3 / 15.6) | 20.7 / 28.2 |
 | 90% interval coverage | 97% | 89% |
 | …within 25 cycles of failure | 100% (Weibull alone: 58%) | 94% (Weibull alone: 54%) |
 
-All numbers are for the exported models, measured through the same `inference.predict` the API serves (`notebooks/14`, `notebooks/15`).
+All numbers are for the exported models, measured through the same `inference.predict` the API serves (`notebooks/14`, `notebooks/15`, `notebooks/18`).
 
 **Robustness:**
 - **5-fold CV:** RSF C-index 0.850 ± 0.019 vs. Cox 0.798 ± 0.052 and Weibull 0.803 ± 0.048. RSF is best in 4 of 5 folds and the most stable.
@@ -59,7 +59,8 @@ All numbers are for the exported models, measured through the same `inference.pr
 2. **The best model is also the most often late.** RSF has the best NASA score *and* the highest late-prediction rate (65%). Its late errors are small, and the NASA penalty grows exponentially, so many small errors cost less than a few large ones.
 3. **Both intervals failed a subgroup check, at opposite ends.** Conformal calibration brought RSF's 90% interval to exactly 90% overall coverage, 40% narrower than Weibull's, but it covered only 27% of engines above the 125-cycle training cap (Weibull: 91%). A later check of the deployed Weibull interval found the reverse: it covered only 58% of engines within 25 cycles of failure, and every miss promised more life than the engine had. The served interval now takes the more cautious lower bound of the two models and Weibull's upper bound, selected on training data only: near-failure coverage went to 100% (FD001) and 94% (FD004) for about one cycle of extra width. [Details](docs/technical_report.md#9-interval-calibration-two-subgroup-checks-at-opposite-ends).
 4. **Survival vs. regression, measured.** With 50% of training engines censored, RSF gets RMSE 17.3. The regression that treats unfinished engines as failed gets 23.1 and predicts about 12 cycles too little life. The regression that drops unfinished engines ties RSF (17.4) and has a better NASA score, because the 125-cycle cap absorbs most of the bias from dropping them. RSF's measured edges are stability and using all the data. [Details](docs/technical_report.md#6-does-survival-analysis-actually-beat-regression-tested-with-a-mixed-answer).
-5. **Two evaluation bugs changed conclusions.** Comparing a row-level validation C-index (0.901) with an engine-level test C-index (0.864) had produced a fake "regression" after tuning. A feature misalignment on cross-validation folds had inflated a tuning result from 2 to 4 of 5 fold wins. Both were fixed, and every affected notebook was re-run. [All 7 bugs](docs/technical_report.md#11-bugs-caught-along-the-way).
+5. **A better point estimate, judged by the NASA score first.** The RSF's error is concentrated: the 11 test engines with more than 125 cycles left are 11% of engines but a quarter of its squared error (it can't predict past the cap). Of the candidates fixed in advance, larger caps "won" on cross-validation only by predicting more life for very young engines and were rejected by a rule aimed at exactly that; averaging RSF with gradient boosting won on every metric, passed the test-set check and the retraining gate, and is now deployed for FD001. [Details](notebooks/18_point_estimate_candidates.ipynb).
+6. **Two evaluation bugs changed conclusions.** Comparing a row-level validation C-index (0.901) with an engine-level test C-index (0.864) had produced a fake "regression" after tuning. A feature misalignment on cross-validation folds had inflated a tuning result from 2 to 4 of 5 fold wins. Both were fixed, and every affected notebook was re-run. [All 7 bugs](docs/technical_report.md#11-bugs-caught-along-the-way).
 
 ---
 
@@ -76,6 +77,7 @@ All numbers are for the exported models, measured through the same `inference.pr
 | Cox PH | Interpretable baseline. Its proportional-hazards test fails for 14 of 25 features, which motivates the next models. |
 | Weibull AFT | Parametric wear-out model (shape ρ = 4.41 from engine lifetimes, i.e. rising failure risk). Provides the interval's upper bound, which can reach past the training cap. |
 | Random Survival Forest | No proportional-hazards or distribution assumptions. Its point estimate is the area under the survival curve. Deployed for prediction, and its lower bound keeps the interval cautious near failure. |
+| Gradient boosting | A regressor on the same capped target and features, averaged with RSF for FD001's point estimate (notebook 18). Not used for the interval. |
 | LSTM / Conv1D→LSTM | Discrete-time hazard networks on raw sensor windows (stretch). They didn't beat RSF. |
 
 **Evaluation.** The NASA score is the primary metric:
@@ -100,7 +102,7 @@ pip install -r requirements.txt
 export PYTHONPATH=src                       # PowerShell: $env:PYTHONPATH = "src"
 python -m turbofan_rul.export_deployment_artifacts --subset FD001
 python -m turbofan_rul.export_deployment_artifacts --subset FD004   # optional
-pytest tests/ -v                            # 217 tests
+pytest tests/ -v                            # 224 tests
 
 # Dashboard against the API (two terminals):
 uvicorn api.main:app --reload
@@ -113,7 +115,7 @@ MODELS_DIR=models streamlit run app/streamlit_app.py
 docker compose up --build
 ```
 
-The notebooks in `notebooks/` run in order, `01_eda` through `17_drift_monitoring`.
+The notebooks in `notebooks/` run in order, `01_eda` through `18_point_estimate_candidates`.
 
 **CI.** `.github/workflows/tests.yml` runs the test suite on every push. A second job installs exactly what the live demo installs (`app/requirements.txt`, Python 3.11), downloads the models from Hugging Face and runs the dashboard in embedded mode with real predictions (`tests/test_dashboard_embedded.py`), so a library-version mismatch with the uploaded models fails CI instead of the live site. It needs one repository variable: **Settings → Secrets and variables → Actions → Variables → `MODEL_REPO`** = your Hugging Face model repo. To run the embedded-mode test locally, set `MODELS_DIR=models` (or `MODEL_REPO`) before `pytest`.
 
@@ -126,10 +128,10 @@ The notebooks in `notebooks/` run in order, `01_eda` through `17_drift_monitorin
 ## 5. Repository
 
 ```
-├── notebooks/            # 01 EDA → 12 interval calibration → 13 censoring experiment → 14–15 interval fix → 16 uncapped upper bound → 17 drift
+├── notebooks/            # 01 EDA → 12 interval calibration → 13 censoring experiment → 14–15 interval fix → 16 uncapped upper bound → 17 drift → 18 point-estimate candidates
 ├── src/turbofan_rul/     # data loading, labeling, features, models, evaluation, CV, conformal, inference, export,
 │                         #   operations: manifest (versions), drift, gate (retraining), publish (Hugging Face)
-├── tests/                # 217 tests (GitHub Actions: .github/workflows/tests.yml; retraining: retrain.yml)
+├── tests/                # 224 tests (GitHub Actions: .github/workflows/tests.yml; retraining: retrain.yml)
 ├── scripts/              # Docker smoke test (GitHub Actions: .github/workflows/docker.yml)
 ├── api/                  # FastAPI service + Dockerfile
 ├── app/                  # Streamlit dashboard, Community Cloud requirements, Dockerfile

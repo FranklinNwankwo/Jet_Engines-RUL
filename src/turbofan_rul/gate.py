@@ -116,7 +116,8 @@ def to_markdown(result: dict) -> str:
         + (" (byte-identical models)" if result["identical_models"] else ""),
         "",
         f"Challenger trained on {cfg.get('training_engines', '?')} engines, "
-        f"RSF min_samples_leaf={cfg.get('rsf_min_samples_leaf', '?')}.",
+        f"RSF min_samples_leaf={cfg.get('rsf_min_samples_leaf', '?')}, "
+        f"point model {cfg.get('point_model') or 'rsf'}.",
         "",
         "| Check | Champion | Challenger | Rule | Result |",
         "|---|---|---|---|---|",

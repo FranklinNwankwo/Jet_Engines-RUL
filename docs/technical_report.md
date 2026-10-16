@@ -208,6 +208,23 @@ Tuned against the same 5-fold CV protocol as Phase 11 — searching and reportin
 
 **A second, previously undisclosed cost of this decision:** smaller leaves mean deeper, larger trees. The deployed FD001 RSF artifact grew from ~44MB (`leaf=30`) to **~216MB** (`leaf=5`) — a real storage and load-time cost.
 
+### A better point estimate, judged by the NASA score first (notebook 18)
+
+RMSE is the number C-MAPSS papers compare, but the decision metric here is the NASA score, so the question was whether the point estimate could improve on NASA without getting worse elsewhere. **Where the error comes from:** the 11 FD001 test engines with more than 125 cycles left are 11% of engines but about a quarter of RSF's squared error, because RSF can't predict past the cap (it under-predicts them by ~23 cycles); without them its RMSE is 14.1, not 15.6.
+
+**Candidates, fixed in advance:** RSF with caps 115 / 125 (deployed) / 135 / 145; an average of RSF and a gradient-boosted regressor on the capped target (300 iterations, learning rate 0.05, untuned); gradient boosting alone as a reference. **Protocol:** the project's 5-fold cross-validation (notebooks 08 and 11), 5 truncation draws per held-out engine. **Rule:** ≥ 5% better mean NASA per engine, ≥ 4 of 5 folds won, not worse on held-out points with ≤ 150 cycles left, RMSE at most 5% worse.
+
+| Cross-validation (FD001) | NASA / engine | ≤150 cycles left | RMSE | Folds won | Passes |
+|---|---|---|---|---|---|
+| RSF cap 125 (deployed) | 78.8 | 6.76 | 23.6 | — | baseline |
+| RSF cap 135 / 145 | 66.5 / 60.4 | 8.24 / 10.14 | 23.5 / 24.0 | 3 / 3 | no: worse at ≤150 |
+| RSF cap 115 | 106.8 | 5.45 | 23.9 | 1 | no |
+| **Blend RSF + gradient boosting** | **69.3** | **5.47** | **22.3** | **4** | **yes** |
+
+The ≤150-cycle rule did its job: larger caps won overall only by predicting more life for very young engines, which the exponential early-prediction penalty rewards but which isn't where the model is used. (The first run's code had left gradient boosting alone among the candidates, against the written plan, and picked it; the code was corrected to match the plan, and gradient boosting stays a reference.)
+
+**Official test set (checked once), then the retraining gate:** NASA per engine 3.07 vs 4.05 (−24%), RMSE 14.2 vs 15.6, MAE 10.4 vs 11.3, C-index 0.877 vs 0.864; the late rate rises from 56% to 61% but late errors are smaller. Exported as a challenger, it passed all four gate rules, with interval coverage unchanged (the interval never uses the point estimate), so it is now FD001's deployed recipe (`POINT_MODEL_BY_SUBSET`). It adds a 1.5 MB model. FD004 keeps the RSF-only point estimate; the same experiment there is the next step.
+
 ---
 
 ## 9. Interval calibration: two subgroup checks, at opposite ends
@@ -279,7 +296,7 @@ The width lands on engines predicted healthy (FD004 median 128 → 217 cycles); 
 
 ## 10. Deployment: a FastAPI service + dashboard, live on Streamlit Community Cloud
 
-**Model pairing, driven by the evaluation above:** RSF supplies the point estimate and risk ranking (best NASA score, best concordance); **the confidence interval combines RSF and Weibull AFT** (section 9): its lower bound is the more cautious of the two, since Weibull's alone promises too much life near failure, and its upper bound is Weibull's, since RSF can't extrapolate past its training ceiling. Cox PH isn't deployed: RSF beats it on every point-estimate and ranking metric, and Cox produces no natural interval to compete with Weibull's. (Against Weibull alone, Cox is not uniformly worse — on FD001 it has the better test C-index, RMSE and MAE, and on FD004 the better RMSE and NASA score — but neither is the deployed point model.) Applies per-subset: FD001 and FD004 each get their own RSF + Weibull pair.
+**Model pairing, driven by the evaluation above:** RSF supplies the point estimate and risk ranking (best NASA score, best concordance; on FD001 averaged with gradient boosting since notebook 18); **the confidence interval combines RSF and Weibull AFT** (section 9): its lower bound is the more cautious of the two, since Weibull's alone promises too much life near failure, and its upper bound is Weibull's, since RSF can't extrapolate past its training ceiling. Cox PH isn't deployed: RSF beats it on every point-estimate and ranking metric, and Cox produces no natural interval to compete with Weibull's. (Against Weibull alone, Cox is not uniformly worse — on FD001 it has the better test C-index, RMSE and MAE, and on FD004 the better RMSE and NASA score — but neither is the deployed point model.) Applies per-subset: FD001 and FD004 each get their own RSF + Weibull pair.
 
 **In the Docker deployment: two separate services communicating over HTTP.** `api/main.py` (FastAPI) owns every model artifact and all scoring logic; `app/streamlit_app.py` holds no model artifacts and calls the API's `/predict`, `/subsets`, and `/subsets/{subset}/metadata` endpoints over plain HTTP, using `API_BASE_URL` (an environment variable, not a hardcoded address) to find it — `http://localhost:8000` for local development, or `http://api:8000` under Docker Compose's service-name DNS. A direct, measurable consequence: the dashboard image's dependency list (`requirements-app.txt`) doesn't include scikit-learn, scikit-survival, or lifelines at all, and the model code is only imported lazily in embedded mode (below) — so in the Docker deployment the dashboard cannot load a model at all.
 
@@ -290,7 +307,7 @@ The width lands on engines predicted healthy (FD004 median 128 → 217 cycles); 
 ```
 turbofan-rul/
 ├── docs/project_brief.md              # full technical spec
-├── notebooks/                         # 01 EDA → 12 RSF interval calibration → 13 censoring experiment → 14–15 interval fix → 16 uncapped upper bound
+├── notebooks/                         # 01 EDA → 12 RSF interval calibration → 13 censoring experiment → 14–15 interval fix → 16 uncapped upper bound → 17 drift → 18 point estimate
 ├── src/turbofan_rul/
 │   ├── data_loading.py                # download + validate C-MAPSS (all 4 subsets)
 │   ├── labeling.py                    # piecewise RUL, (duration, event) construction
@@ -318,7 +335,7 @@ turbofan-rul/
 ├── docker-compose.yml                 # local two-service orchestration
 ├── requirements-api.txt               # lean, API-only deps (no jupyter/matplotlib/tensorflow)
 ├── requirements-app.txt               # leaner still -- streamlit + pandas + requests, nothing ML
-├── tests/                             # 217 tests across 16 files
+├── tests/                             # 224 tests across 16 files
 └── models/
     ├── fd001/                         # RSF + Weibull + metadata for FD001
     └── fd004/                         # RSF + Weibull + regime-clustering artifacts for FD004
@@ -333,7 +350,7 @@ python -m turbofan_rul.export_deployment_artifacts --subset FD004   # optional -
 uvicorn api.main:app --reload                          # API on :8000
 API_BASE_URL=http://localhost:8000 streamlit run app/streamlit_app.py   # dashboard on :8501 (HTTP mode)
 MODELS_DIR=models streamlit run app/streamlit_app.py                    # or: no API, models loaded in-app
-pytest tests/ -v                                       # 217 tests
+pytest tests/ -v                                       # 224 tests
 
 # Containerized, both services:
 docker compose up --build
@@ -362,8 +379,8 @@ docker compose up --build
 | Fleet → model | Drift windows | Model on that fleet |
 |---|---|---|
 | FD001 → FD001, FD004 → FD004 | 0% | its normal accuracy |
-| FD002 → FD001 (six regimes) | 100% | RMSE 73.7, coverage 10% |
-| FD003 → FD001 (new fault mode) | 100% | RMSE 22.3, NASA 25.6 vs 4.0 |
+| FD002 → FD001 (six regimes) | 100% | RMSE 56.3, coverage 10% |
+| FD003 → FD001 (new fault mode) | 100% | RMSE 22.1, NASA 19.0 vs 3.07 |
 | FD002 → FD004 | 100% | RMSE 27.4 — fine: drift is not harm |
 
 The price of no false alarms is sensitivity: a window needs about 30% foreign requests before it fires.

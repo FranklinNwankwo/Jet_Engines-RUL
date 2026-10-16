@@ -83,6 +83,9 @@ class DeploymentBundle:
     # drift_reference.json (drift.py): used for the per-request input check
     # and by the API's drift monitor. Optional; not part of the model version.
     drift_reference: dict | None = None
+    # Optional second point model (notebook 18): when present, the point
+    # estimate is the average of RSF's RMST and this regressor's prediction.
+    gbm_model: object = None
 
     def __post_init__(self):
         if self.interval is None:
@@ -123,6 +126,8 @@ def load_deployment_bundle(models_dir: Path | str, verify_manifest: bool = True)
         rsf_model=models.load_model(models_dir / "rsf.joblib"),
         weibull_model=models.load_model(models_dir / "weibull_aft.joblib"),
         weibull_scaler=models.load_model(models_dir / "weibull_scaler.joblib"),
+        gbm_model=(models.load_model(models_dir / "gbm.joblib")
+                   if meta.get("point_model", {}).get("type") == "blend" else None),
         regime_kmeans=regime_kmeans,
         regime_norm_stats=regime_norm_stats,
         rsf_interval_correction=meta.get("rsf_interval_correction", 0.0),
@@ -210,7 +215,13 @@ def predict_with_features(bundle: DeploymentBundle, readings: pd.DataFrame) -> t
 
     # --- RSF: point estimate + risk ranking ---
     rsf_out = models.predict_rul_from_survival(bundle.rsf_model, feature_row[bundle.full_feature_cols])
-    predicted_rul = float(rsf_out["pred_rul"].iloc[0])
+    rsf_point = float(rsf_out["pred_rul"].iloc[0])
+    if bundle.gbm_model is not None:
+        gbm_point = max(float(bundle.gbm_model.predict(feature_row[bundle.full_feature_cols])[0]), 0.0)
+        predicted_rul = (rsf_point + gbm_point) / 2
+    else:
+        gbm_point = None
+        predicted_rul = rsf_point
     rsf_ci_low_raw = float(rsf_out["pred_ci_low"].iloc[0])
     rsf_ci_high_raw = float(rsf_out["pred_ci_high"].iloc[0])
 
@@ -265,11 +276,14 @@ def predict_with_features(bundle: DeploymentBundle, readings: pd.DataFrame) -> t
         "risk_level": risk_level,
         "cycles_observed": int(readings["time_cycles"].iloc[-1]),
         "model_source": {
-            "point_estimate": "random_survival_forest",
+            "point_estimate": ("blend: mean of random_survival_forest and gradient_boosting"
+                               if bundle.gbm_model is not None else "random_survival_forest"),
             "interval": f"{bundle.interval.name}: lower = min(RSF, Weibull AFT), upper = Weibull AFT"
                         if bundle.interval.base == "hybrid" else bundle.interval.name,
         },
         "weibull_interval_90": [round(weibull_low, 1), round(weibull_high, 1)],
+        "point_estimate_components": {"random_survival_forest": round(rsf_point, 1),
+                                      "gradient_boosting": None if gbm_point is None else round(gbm_point, 1)},
         # Are this engine's inputs within what the model was trained on?
         # (drift.familiarity; None if the bundle has no drift reference)
         "input_check": drift.familiarity(bundle.drift_reference, feature_row),

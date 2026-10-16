@@ -28,6 +28,11 @@ on:
         description: RSF leaf size (blank = the deployed recipe)
         type: string
         default: ""
+      point_model:
+        description: Point estimate -- deployed (the subset's deployed recipe), rsf, or blend (RSF + gradient boosting)
+        type: choice
+        options: [deployed, rsf, blend]
+        default: deployed
       train_fraction:
         description: Fraction of training engines to use (1.0 = all; lower rehearses data loss)
         type: string
@@ -55,6 +60,7 @@ jobs:
       SUBSET: ${{ inputs.subset }}
       LEAF: ${{ inputs.rsf_min_samples_leaf }}
       FRACTION: ${{ inputs.train_fraction }}
+      POINT_MODEL: ${{ inputs.point_model }}
       CHAMPION_REVISION: ${{ inputs.champion_revision || vars.MODEL_REVISION }}
     steps:
       - uses: actions/checkout@v4
@@ -71,6 +77,7 @@ jobs:
       - name: Train the challenger
         run: |
           ARGS="--subset $SUBSET --models-dir models_challenger --train-fraction $FRACTION"
+          if [ "$POINT_MODEL" != "deployed" ]; then ARGS="$ARGS --point-model $POINT_MODEL"; fi
           if [ -n "$LEAF" ]; then ARGS="$ARGS --rsf-min-samples-leaf $LEAF"; fi
           python -m turbofan_rul.export_deployment_artifacts $ARGS
 

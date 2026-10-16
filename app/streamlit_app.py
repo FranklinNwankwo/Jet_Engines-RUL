@@ -480,8 +480,10 @@ def render_prediction(result: dict, true_rul: float | None = None) -> None:
     low, high = result["confidence_interval_90"]
 
     c1, c2, c3 = st.columns(3)
-    c1.markdown(card("Predicted remaining life", f"{pred:.0f}", "cycles",
-                     "Random Survival Forest point estimate"), unsafe_allow_html=True)
+    parts = result.get("point_estimate_components") or {}
+    source = ("Average of the Random Survival Forest and gradient boosting"
+              if parts.get("gradient_boosting") is not None else "Random Survival Forest point estimate")
+    c1.markdown(card("Predicted remaining life", f"{pred:.0f}", "cycles", source), unsafe_allow_html=True)
     c2.markdown(card("90% confidence interval", f"{low:.0f} – {high:.0f}", "cycles",
                      "Lower bound: the more cautious of RSF and Weibull AFT · upper: Weibull AFT"),
                 unsafe_allow_html=True)
@@ -512,7 +514,8 @@ def render_prediction(result: dict, true_rul: float | None = None) -> None:
         st.info(
             "The point estimate falls outside its own interval. This is an expected "
             "consequence of using two independent models (the interval's upper bound comes "
-            "from Weibull AFT, the point estimate from the Random Survival Forest) rather "
+            "from Weibull AFT, the point estimate from the Random Survival Forest, blended with "
+            "gradient boosting on FD001) rather "
             "than a bug.",
             icon="ℹ️",
         )
@@ -535,8 +538,9 @@ st.markdown(
       <div class="eyebrow">Predictive maintenance · NASA C-MAPSS</div>
       <h1>How long until this engine fails?</h1>
       <p>Remaining-useful-life prediction for turbofan engines, framed as a
-         survival-analysis problem: a Random Survival Forest gives the estimate and
-         risk ranking, and a 90% interval combines it with a Weibull AFT model.</p>
+         survival-analysis problem: a Random Survival Forest (blended with gradient boosting
+         on FD001) gives the estimate and risk ranking, and a 90% interval combines it with a
+         Weibull AFT model.</p>
       <div class="pills">
         <span class="pill">Random Survival Forest</span>
         <span class="pill">Weibull AFT</span>
@@ -607,7 +611,8 @@ with st.sidebar:
             "1. You send an engine's recent sensor readings.\n"
             "2. The API rebuilds the same rolling-window features used in training.\n"
             "3. **Random Survival Forest** estimates the survival curve; the area under it "
-            "is the predicted remaining life.\n"
+            "is its predicted remaining life. On FD001 that is averaged with a **gradient "
+            "boosting** regressor, which cut the NASA score by about a quarter in testing.\n"
             "4. The **90% interval** combines two models: its lower bound is the more "
             "cautious of the forest's and a **Weibull AFT** model's, so it doesn't promise "
             "too much life near failure; its upper bound is Weibull's, which can extrapolate "

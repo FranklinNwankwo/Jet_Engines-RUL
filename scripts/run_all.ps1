@@ -42,7 +42,7 @@ $total = [Diagnostics.Stopwatch]::StartNew()
 
 # --- notebooks ---------------------------------------------------------------
 if (-not $SkipNotebooks) {
-    # Notebooks 15 and 16 load their out-of-fold predictions from these files
+    # Notebooks 15, 16 and 18 load their out-of-fold predictions from these files
     # when they exist. Deleting them makes the notebooks recompute them from
     # scratch (~15 and ~40 minutes), so the selections are reproduced on this
     # machine, not just re-read.
@@ -51,6 +51,9 @@ if (-not $SkipNotebooks) {
     }
     if ($StartAt -le 16) {
         Remove-Item data\processed\interval_oof_uncapped_*.csv -ErrorAction SilentlyContinue
+    }
+    if ($StartAt -le 18) {
+        Remove-Item data\processed\point_candidates_oof_fd001.csv -ErrorAction SilentlyContinue
     }
 
     # -Filter doesn't support [0-9] ranges, so match the "NN_" prefix with a regex.
@@ -114,7 +117,9 @@ $checks = @(
     @{ File = "notebooks\16_uncapped_upper_bound.ipynb";    Text = "better on C-index and RMSE on both subsets: False" },
     @{ File = "notebooks\16_uncapped_upper_bound.ipynb";    Text = "Selected within the 250 MB budget: uncapped RSF upper (leaf 30)" },
     @{ File = "notebooks\16_uncapped_upper_bound.ipynb";    Text = "Confirmation on the test sets: PASSED" },
-    @{ File = "notebooks\17_drift_monitoring.ipynb";         Text = "Own fleets: no drift windows" }
+    @{ File = "notebooks\17_drift_monitoring.ipynb";         Text = "Own fleets: no drift windows" },
+    @{ File = "notebooks\18_point_estimate_candidates.ipynb"; Text = "Selected on cross-validation: Blend RSF + GB, cap 125" },
+    @{ File = "notebooks\18_point_estimate_candidates.ipynb"; Text = "Test-set rule -- blend NASA lower than deployed: PASSED" }
 )
 $ok = $true
 foreach ($c in $checks) {

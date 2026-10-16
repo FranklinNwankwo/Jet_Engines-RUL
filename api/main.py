@@ -160,6 +160,7 @@ class PredictResponse(BaseModel):
     model_source: dict
     weibull_interval_90: list[float]
     input_check: dict | None = None
+    point_estimate_components: dict | None = None
     rsf_calibrated_interval_supplementary: dict
 
 
