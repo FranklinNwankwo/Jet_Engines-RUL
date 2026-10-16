@@ -31,9 +31,11 @@
 |---|---|---|---|---|---|---|
 | Cox PH | 1672.5 | 0.821 | 22.01 | 16.91 | 54% | — |
 | Weibull AFT | 1288.2 | 0.818 | 23.14 | 18.27 | 48% | 90% |
-| LSTM (deep, stretch) | 846.4 | 0.838 | 17.43 | 12.41 | 58% | 73% |
-| Conv1D→LSTM (deep, stretch) | 967.3 | 0.843 | 18.34 | 13.34 | 57% | 74% |
+| LSTM (deep, stretch)* | 921.3 ± 67 | 0.839 ± 0.005 | 17.80 | 12.83 | 60% | 75% |
+| Conv1D→LSTM (deep, stretch)* | 968.8 ± 76 | 0.844 ± 0.003 | 18.24 | 12.96 | 57% | 78% |
 | **Random Survival Forest** | **462.5** | **0.864** | **16.27** | **11.99** | 65% | 86% |
+
+*Mean (± standard deviation) of 3 seeds each, all scored on the test set ([notebook 07](notebooks/07_deep_survival_stretch.ipynb), section 10); none of the 6 runs reaches RSF on any column.
 
 **Deployed models** (retrained on all training engines; FD001's point estimate averages RSF with gradient boosting, FD004's is RSF alone):
 

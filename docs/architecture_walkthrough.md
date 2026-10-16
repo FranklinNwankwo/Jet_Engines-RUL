@@ -33,7 +33,8 @@ This is the "how did we get here" document; every phase, what triggered it, what
 27. [Phase 26: the operations layer — versions, drift, retraining gate](#27-phase-26-the-operations-layer--versions-drift-retraining-gate)
 28. [Phase 27: a better point estimate, decided by the gate](#28-phase-27-a-better-point-estimate-decided-by-the-gate)
 29. [Phase 28: the same experiment on FD004, recorded not deployed](#29-phase-28-the-same-experiment-on-fd004-recorded-not-deployed)
-30. [Where things stand](#30-where-things-stand)
+30. [Phase 29: every deep-model seed on the test set](#30-phase-29-every-deep-model-seed-on-the-test-set)
+31. [Where things stand](#31-where-things-stand)
 
 ---
 
@@ -139,7 +140,7 @@ This phase went through three distinct versions, which is worth tracing since it
 
 **Effective Baseline:** Built the combined **Conv1D→LSTM** architecture and, given the just-documented non-determinism, compared it against the plain LSTM across **3 seeds each** rather than one run.
 
-**Final honest result (re-run in Phase 18 with deterministic training — `keras.utils.set_random_seed` plus `tf.config.experimental.enable_op_determinism()`):** the plain LSTM had the higher validation concordance on all 3 seeds (0.880 vs. 0.871, a gap 2.5× the larger seed-to-seed std) — the CNN front-end didn't help on ~80 training engines. On the official test set, neither beats RSF: C-index 0.838 (LSTM) / 0.843 (Conv1D→LSTM) vs. 0.864, NASA score 846 / 967 vs. 463, interval coverage 73% / 74%. Reported as directly as a win would have been. (An earlier version called the two architectures "statistically tied" at 0.879 vs. 0.871 and compared them with RSF's 0.901 — a validation figure; see Phase 18.)
+**Final honest result (re-run in Phase 18 with deterministic training — `keras.utils.set_random_seed` plus `tf.config.experimental.enable_op_determinism()`):** the plain LSTM had the higher validation concordance on all 3 seeds (0.880 vs. 0.871, a gap 2.5× the larger seed-to-seed std) — the CNN front-end didn't help on ~80 training engines. On the official test set, neither beats RSF: C-index 0.838 (LSTM) / 0.844 (Conv1D→LSTM) vs. 0.864, NASA score 847 / 926 vs. 463, interval coverage 74% / 78% (seed 42; all three seeds were later scored on the test set, Phase 29). Reported as directly as a win would have been. (An earlier version called the two architectures "statistically tied" at 0.879 vs. 0.871 and compared them with RSF's 0.901 — a validation figure; see Phase 18.)
 
 ---
 
@@ -382,9 +383,19 @@ Running the checks inside the containers, rather than from the runner, is what t
 
 ---
 
-## 30. Where things stand
+## 30. Phase 29: every deep-model seed on the test set
 
-**Done, verified with real execution:** the full survival-analysis framing and censoring argument; the complete model ladder (Cox → Weibull → RSF → two deep-learning architectures), each addition justified by the previous model's diagnostics; domain-appropriate evaluation (NASA score primary, RMSE secondary); 5-fold cross-validation confirming the ranking isn't a single-split artifact; generalization checks across three additional dataset subsets; hyperparameter tuning validated against both CV and the real official test set; a conformal-prediction fix for RSF's interval coverage, validated by subgroup rather than trusted in aggregate; the Phase 8/9 feature-scope leak, measured rather than left as a documented assumption; a properly separated two-service HTTP architecture, fresh-clone verified end to end (install → export → serve → test, from nothing); a full correctness review (Phase 18) with every notebook re-run; the survival framing tested under simulated censoring, with a mixed result reported as measured (Phase 20); a short README with results first and a full technical report (Phase 21); a redesigned dashboard live at [https://jetengines-rul.streamlit.app/](https://jetengines-rul.streamlit.app/) (Phase 19); 224 tests across 16 files run by GitHub Actions (Phase 22 onwards); both Docker images built and smoke-tested in CI (Phase 23); the deployed interval checked by subgroup at both ends of the remaining-life range, with a near-failure fix selected on training data (Phase 24); training without the cap measured for both the point estimate and the upper bound, and declined on cost-benefit grounds (Phase 25); versioned models, drift monitoring and a champion/challenger retraining gate (Phase 26); a blended point estimate selected by NASA score and promoted by that gate (Phase 27), and the same experiment on FD004 failing the pre-set rule and kept undeployed (Phase 28); and a README, project brief and architecture walkthrough that match the actual current state rather than the original plan.
+**Why:** notebook 07 trained 3 seeds of each deep architecture but scored only seed 42 on the official test set, so the deep models' test numbers came from one run each, a stated gap since Phase 7.
+
+**What was built:** section 10 of `notebooks/07_deep_survival_stretch.ipynb`. It keeps all six trained models (no retraining, no selection) and scores each on the 100 test engines.
+
+**Result:** none of the six runs reaches RSF on test C-index, NASA score or RMSE. Means over 3 seeds: LSTM C-index 0.839 ± 0.005, NASA 9.21 ± 0.67 per engine; Conv1D→LSTM 0.844 ± 0.003, 9.69 ± 0.76; RSF 0.864 and 4.63. Even the best runs' gaps are about 3× (C-index) and 5× (NASA) the seed spread, so the Phase 6 conclusion doesn't depend on the seed. Two smaller findings: the seed-42 LSTM reported alone was its best run on NASA (8.47 vs 9.78 and 9.39), and the validation ranking of the two architectures (plain LSTM ahead on all 3 seeds) doesn't carry over to the test set, where they tie.
+
+---
+
+## 31. Where things stand
+
+**Done, verified with real execution:** the full survival-analysis framing and censoring argument; the complete model ladder (Cox → Weibull → RSF → two deep-learning architectures), each addition justified by the previous model's diagnostics; domain-appropriate evaluation (NASA score primary, RMSE secondary); 5-fold cross-validation confirming the ranking isn't a single-split artifact; generalization checks across three additional dataset subsets; hyperparameter tuning validated against both CV and the real official test set; a conformal-prediction fix for RSF's interval coverage, validated by subgroup rather than trusted in aggregate; the Phase 8/9 feature-scope leak, measured rather than left as a documented assumption; a properly separated two-service HTTP architecture, fresh-clone verified end to end (install → export → serve → test, from nothing); a full correctness review (Phase 18) with every notebook re-run; the survival framing tested under simulated censoring, with a mixed result reported as measured (Phase 20); a short README with results first and a full technical report (Phase 21); a redesigned dashboard live at [https://jetengines-rul.streamlit.app/](https://jetengines-rul.streamlit.app/) (Phase 19); 224 tests across 16 files run by GitHub Actions (Phase 22 onwards); both Docker images built and smoke-tested in CI (Phase 23); the deployed interval checked by subgroup at both ends of the remaining-life range, with a near-failure fix selected on training data (Phase 24); training without the cap measured for both the point estimate and the upper bound, and declined on cost-benefit grounds (Phase 25); versioned models, drift monitoring and a champion/challenger retraining gate (Phase 26); a blended point estimate selected by NASA score and promoted by that gate (Phase 27), and the same experiment on FD004 failing the pre-set rule and kept undeployed (Phase 28); every deep-model seed scored on the test set (Phase 29); and a README, project brief and architecture walkthrough that match the actual current state rather than the original plan.
 
 **Genuinely outstanding — everything left, and nothing more:**
 

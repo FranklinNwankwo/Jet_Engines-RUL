@@ -114,6 +114,7 @@ if ($LASTEXITCODE -ne 0) {
     exit 1
 }
 $checks = @(
+    @{ File = "notebooks\07_deep_survival_stretch.ipynb";   Text = "Deep runs matching or beating RSF on test C-index, NASA or RMSE: 0 of 6" },
     @{ File = "notebooks\14_interval_coverage_check.ipynb"; Text = "FD001 reproduces notebook 12" },
     @{ File = "notebooks\15_interval_fix.ipynb";            Text = "Selected by the rule: hybrid+none" },
     @{ File = "notebooks\15_interval_fix.ipynb";            Text = "Confirmation rule: PASSED" },
