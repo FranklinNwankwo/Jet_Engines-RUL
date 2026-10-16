@@ -303,6 +303,24 @@
   "uses_regime_clustering": false,
   "rsf_min_samples_leaf": 5,
   "rsf_row_stride": 3,
+  "training_engines": 100,
+  "train_fraction": 1.0,
+  "point_model": {
+    "type": "blend",
+    "members": [
+      "random_survival_forest",
+      "gradient_boosting"
+    ],
+    "weights": [
+      0.5,
+      0.5
+    ],
+    "gradient_boosting_params": {
+      "max_iter": 300,
+      "learning_rate": 0.05,
+      "random_state": 0
+    }
+  },
   "rsf_interval_correction": 4.998999999999995,
   "interval": {
     "base": "hybrid",

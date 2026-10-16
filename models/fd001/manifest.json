@@ -1,13 +1,14 @@
 {
   "schema_version": 1,
-  "model_version": "fd001-3328802d81b0",
+  "model_version": "fd001-fab284ab217a",
   "subset": "FD001",
-  "created_at": "2026-10-15T13:31:19Z",
+  "created_at": "2026-10-16T16:42:09Z",
   "artifacts": {
-    "deployment_metadata.json": "b4ed3e0560b7465456a4f006568c472f76472866bc4071dfaa124d04e1586922",
+    "deployment_metadata.json": "02942b2e503746c0127dee27a3f2f77c26919683be27afa94dc322060143f656",
     "rsf.joblib": "989b38d0e538fd576c2460a327ca9eda458f408fd2f1964c270b8181d1199849",
-    "weibull_aft.joblib": "c9240296c4067be7cb058adcb679dd498bfd3bb03354637caf13db11fd0ffea6",
-    "weibull_scaler.joblib": "06a023bd463d1c8271e25449fa602a8d5fc3940c871253d5fc09ac7d2ecb825b"
+    "weibull_aft.joblib": "44727e03931978eb0c0c52b41a4e6a0cf30491f8eb7a569db7aeaadb8514dd55",
+    "weibull_scaler.joblib": "06a023bd463d1c8271e25449fa602a8d5fc3940c871253d5fc09ac7d2ecb825b",
+    "gbm.joblib": "69396d9075766117c557b1b7eda0d5dba5f19ea3e02b2bfe7f9c417f5dde5a75"
   },
   "training_data": {
     "train_FD001.txt": "963b5e22825b34d8b21c69e1aeb4af3e647050eb672ee8834ba4b5d91d2de0f8",
@@ -15,8 +16,8 @@
     "RUL_FD001.txt": "a19c8ec94931949d0485bdc35118206e9c81c4547b422efb9cf86f4ceddbceca"
   },
   "code": {
-    "commit": "1c7eea06d06129a6c00d8f46f18e14620c4d21b0",
-    "uncommitted_changes": false
+    "commit": "58c8bf728777503efb2fd3af086435e0ece2b896",
+    "uncommitted_changes": true
   },
   "environment": {
     "python": "3.11.9",
@@ -35,6 +36,9 @@
     "cap": 125,
     "rsf_min_samples_leaf": 5,
     "rsf_row_stride": 3,
+    "training_engines": 100,
+    "point_model": "blend",
+    "train_fraction": 1.0,
     "uses_regime_clustering": false,
     "rsf_interval_correction": 4.998999999999995,
     "interval": {
@@ -56,11 +60,11 @@
   },
   "test_metrics": {
     "n_engines": 100,
-    "c_index": 0.864,
-    "nasa_score_per_engine": 4.049,
-    "rmse": 15.557,
-    "mae": 11.332,
-    "late_rate": 0.56,
+    "c_index": 0.8768,
+    "nasa_score_per_engine": 3.119,
+    "rmse": 14.241,
+    "mae": 10.436,
+    "late_rate": 0.6,
     "interval_coverage": 0.97,
     "interval_coverage_near_failure": 1.0,
     "interval_coverage_above_cap": 0.9091,
