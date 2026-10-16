@@ -219,11 +219,11 @@ RMSE is the number C-MAPSS papers compare, but the decision metric here is the N
 | RSF cap 125 (deployed) | 78.8 | 6.76 | 23.6 | — | baseline |
 | RSF cap 135 / 145 | 66.5 / 60.4 | 8.24 / 10.14 | 23.5 / 24.0 | 3 / 3 | no: worse at ≤150 |
 | RSF cap 115 | 106.8 | 5.45 | 23.9 | 1 | no |
-| **Blend RSF + gradient boosting** | **69.3** | **5.47** | **22.3** | **4** | **yes** |
+| **Blend RSF + gradient boosting** | **68.4** | **5.50** | **22.3** | **4** | **yes** |
 
 The ≤150-cycle rule did its job: larger caps won overall only by predicting more life for very young engines, which the exponential early-prediction penalty rewards but which isn't where the model is used. (The first run's code had left gradient boosting alone among the candidates, against the written plan, and picked it; the code was corrected to match the plan, and gradient boosting stays a reference.)
 
-**Official test set (checked once), then the retraining gate:** NASA per engine 3.07 vs 4.05 (−24%), RMSE 14.2 vs 15.6, MAE 10.4 vs 11.3, C-index 0.877 vs 0.864; the late rate rises from 56% to 61% but late errors are smaller. Exported as a challenger, it passed all four gate rules, with interval coverage unchanged (the interval never uses the point estimate), so it is now FD001's deployed recipe (`POINT_MODEL_BY_SUBSET`). It adds a 1.5 MB model.
+**Official test set (checked once), then the retraining gate:** NASA per engine 3.12 vs 4.05 (−23%), RMSE 14.2 vs 15.6, MAE 10.4 vs 11.3, C-index 0.877 vs 0.864; the late rate rises from 56% to 62% but late errors are smaller. Exported as a challenger, it passed all four gate rules, with interval coverage unchanged (the interval never uses the point estimate), so it is now FD001's deployed recipe (`POINT_MODEL_BY_SUBSET`). It adds a 1.5 MB model. (These are the repository's reproduced numbers. Gradient boosting's fit shifts slightly with numpy/pandas versions: a second environment gave NASA 3.07 and RMSE 14.16 for the same code; the RSF reproduces exactly.)
 
 ### The same experiment on FD004: failed the rule, recorded, not deployed (notebook 19)
 
@@ -232,12 +232,12 @@ Same candidates (RSF vs the blend, gradient boosting alone as reference), same p
 | Cross-validation (FD004) | NASA / point | ≤150 cycles left | RMSE | Folds won (overall) | Folds won (≤150) |
 |---|---|---|---|---|---|
 | RSF (deployed) | 140,773 | 14.86 | 37.2 | — | — |
-| Blend RSF + gradient boosting | 148,822 | **9.24** | **36.0** | 3 (4 required) | **5** |
-| Gradient boosting (reference) | 158,237 | 7.86 | 35.4 | — | — |
+| Blend RSF + gradient boosting | 144,695 | **9.60** | **36.0** | 3 (4 required) | **5** |
+| Gradient boosting (reference) | 149,831 | 8.41 | 35.5 | — | — |
 
-**The blend failed rules (a) and (b), so FD004 keeps RSF.** It passed (c) and (d). **Why it failed:** FD004 engines live up to 543 cycles, so cross-validation scores points up to 366 cycles from failure, where every model predicts just under the 125-cycle cap and the early penalty grows exponentially: 99.99% of the overall score comes from points with more than 150 cycles left, and 95% from one held-out point (engine #118, 366 cycles left; RSF 119.9, blend 119.2). FD001 shows the same effect more mildly (92% from points beyond 150, longest 241), which is why notebook 18 already had rule (c).
+**The blend failed rules (a) and (b), so FD004 keeps RSF.** It passed (c) and (d). **Why it failed:** FD004 engines live up to 543 cycles, so cross-validation scores points up to 366 cycles from failure, where every model predicts just under the 125-cycle cap and the early penalty grows exponentially: 99.99% of the overall score comes from points with more than 150 cycles left, and 95% from one held-out point (engine #118, 366 cycles left; RSF 119.9, blend 119.5). FD001 shows the same effect more mildly (92% from points beyond 150, longest 241), which is why notebook 18 already had rule (c).
 
-**Official test set, scored once for the record:** NASA per engine 19.2 vs 22.4, RMSE 26.8 vs 28.2, C-index 0.876 vs 0.862, near-failure late errors above 10 cycles 9 vs 12. Better on every metric, but the rule set before the run decides, and rewriting a rule after it failed and after the test set was seen would turn the protocol into a formality. **For future experiments** rules (a) and (b) should score only points with at most 150 cycles left (or use a capped penalty); re-running this one under the corrected rule on the same, already-seen data would not be independent evidence.
+**Official test set, scored once for the record:** NASA per engine 19.4 vs 22.4, RMSE 27.0 vs 28.2, C-index 0.875 vs 0.862, near-failure late errors above 10 cycles 8 vs 12. Better on every metric, but the rule set before the run decides, and rewriting a rule after it failed and after the test set was seen would turn the protocol into a formality. **For future experiments** rules (a) and (b) should score only points with at most 150 cycles left (or use a capped penalty); re-running this one under the corrected rule on the same, already-seen data would not be independent evidence.
 
 ---
 
@@ -393,8 +393,8 @@ docker compose up --build
 | Fleet → model | Drift windows | Model on that fleet |
 |---|---|---|
 | FD001 → FD001, FD004 → FD004 | 0% | its normal accuracy |
-| FD002 → FD001 (six regimes) | 100% | RMSE 56.3, coverage 10% |
-| FD003 → FD001 (new fault mode) | 100% | RMSE 22.1, NASA 19.0 vs 3.07 |
+| FD002 → FD001 (six regimes) | 100% | RMSE 55.8, coverage 10% |
+| FD003 → FD001 (new fault mode) | 100% | RMSE 22.1, NASA 19.3 vs 3.12 |
 | FD002 → FD004 | 100% | RMSE 27.4 — fine: drift is not harm |
 
 The price of no false alarms is sensitivity: a window needs about 30% foreign requests before it fires.

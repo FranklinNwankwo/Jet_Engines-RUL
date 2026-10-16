@@ -366,7 +366,7 @@ Running the checks inside the containers, rather than from the runner, is what t
 
 **A mistake caught in my own selection code:** it left gradient boosting alone among the candidates, against the written plan, and picked it. Corrected to match the plan; disclosed in the notebook.
 
-**Result:** the blend won (cross-validated NASA 69.3 vs 78.8, 4 of 5 folds), passed the pre-set test check (NASA 3.07 vs 4.05 per engine, RMSE 14.2 vs 15.6, C-index 0.877 vs 0.864), then passed the retraining gate as a real challenger, the first time the gate decided something that mattered. `export_deployment_artifacts.py` gained `--point-model`, inference averages the two members and reports both (`point_estimate_components`), and FD001's deployed recipe is now the blend; FD004 stays RSF-only.
+**Result:** the blend won (cross-validated NASA 68.4 vs 78.8, 4 of 5 folds), passed the pre-set test check (NASA 3.12 vs 4.05 per engine, RMSE 14.2 vs 15.6, C-index 0.877 vs 0.864), then passed the retraining gate as a real challenger, the first time the gate decided something that mattered. `export_deployment_artifacts.py` gained `--point-model`, inference averages the two members and reports both (`point_estimate_components`), and FD001's deployed recipe is now the blend; FD004 stays RSF-only.
 
 ---
 
@@ -376,7 +376,7 @@ Running the checks inside the containers, rather than from the runner, is what t
 
 **What was built:** `notebooks/19_fd004_point_estimate.ipynb`, notebook 18's candidates, protocol and rule unchanged, with FD004's deployed settings.
 
-**Result: the blend failed rules (a) and (b), so FD004 keeps RSF.** Cross-validated NASA 148,822 vs 140,773, winning 3 of 5 folds (4 required). A diagnostic showed what those numbers measure: 99.99% of the score comes from points more than 150 cycles from failure, where every model predicts just under the cap, and 95% from one held-out point (engine #118 with 366 cycles left; 119.9 vs 119.2 predicted). Where the model is used, the blend won all 5 folds (NASA 9.2 vs 14.9 at ≤150 cycles left), and the test set, scored once for the record, agreed (NASA 19.2 vs 22.4, RMSE 26.8 vs 28.2, C-index 0.876 vs 0.862).
+**Result: the blend failed rules (a) and (b), so FD004 keeps RSF.** Cross-validated NASA 144,695 vs 140,773, winning 3 of 5 folds (4 required). A diagnostic showed what those numbers measure: 99.99% of the score comes from points more than 150 cycles from failure, where every model predicts just under the cap, and 95% from one held-out point (engine #118 with 366 cycles left; 119.9 vs 119.5 predicted). Where the model is used, the blend won all 5 folds (NASA 9.6 vs 14.9 at ≤150 cycles left), and the test set, scored once for the record, agreed (NASA 19.4 vs 22.4, RMSE 27.0 vs 28.2, C-index 0.875 vs 0.862).
 
 **The decision, and why:** not deployed. The rule was fixed before the run, and changing it after it failed, with the test result already seen, would make the protocol meaningless. The finding is kept instead: overall cross-validated NASA is unreliable when engines live far beyond the cap, so future rules should score only points with at most 150 cycles left. The two subsets now differ for a tested, documented reason.
 
