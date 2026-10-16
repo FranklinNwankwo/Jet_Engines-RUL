@@ -42,9 +42,9 @@ $total = [Diagnostics.Stopwatch]::StartNew()
 
 # --- notebooks ---------------------------------------------------------------
 if (-not $SkipNotebooks) {
-    # Notebooks 15, 16 and 18 load their out-of-fold predictions from these files
+    # Notebooks 15, 16, 18 and 19 load their out-of-fold predictions from these files
     # when they exist. Deleting them makes the notebooks recompute them from
-    # scratch (~15 and ~40 minutes), so the selections are reproduced on this
+    # scratch (~10-40 minutes each), so the selections are reproduced on this
     # machine, not just re-read.
     if ($StartAt -le 15) {
         Remove-Item data\processed\interval_oof_fd001.csv, data\processed\interval_oof_fd004.csv -ErrorAction SilentlyContinue
@@ -54,6 +54,9 @@ if (-not $SkipNotebooks) {
     }
     if ($StartAt -le 18) {
         Remove-Item data\processed\point_candidates_oof_fd001.csv -ErrorAction SilentlyContinue
+    }
+    if ($StartAt -le 19) {
+        Remove-Item data\processed\point_candidates_oof_fd004.csv -ErrorAction SilentlyContinue
     }
 
     # -Filter doesn't support [0-9] ranges, so match the "NN_" prefix with a regex.
@@ -119,7 +122,9 @@ $checks = @(
     @{ File = "notebooks\16_uncapped_upper_bound.ipynb";    Text = "Confirmation on the test sets: PASSED" },
     @{ File = "notebooks\17_drift_monitoring.ipynb";         Text = "Own fleets: no drift windows" },
     @{ File = "notebooks\18_point_estimate_candidates.ipynb"; Text = "Selected on cross-validation: Blend RSF + GB, cap 125" },
-    @{ File = "notebooks\18_point_estimate_candidates.ipynb"; Text = "Test-set rule -- blend NASA lower than deployed: PASSED" }
+    @{ File = "notebooks\18_point_estimate_candidates.ipynb"; Text = "Test-set rule -- blend NASA lower than deployed: PASSED" },
+    @{ File = "notebooks\19_fd004_point_estimate.ipynb";     Text = "Selected on cross-validation: none -- the deployed RSF stays" },
+    @{ File = "notebooks\19_fd004_point_estimate.ipynb";     Text = "Blend better at <= 150 cycles left in 5 of 5 folds" }
 )
 $ok = $true
 foreach ($c in $checks) {

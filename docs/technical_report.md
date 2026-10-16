@@ -223,7 +223,21 @@ RMSE is the number C-MAPSS papers compare, but the decision metric here is the N
 
 The ≤150-cycle rule did its job: larger caps won overall only by predicting more life for very young engines, which the exponential early-prediction penalty rewards but which isn't where the model is used. (The first run's code had left gradient boosting alone among the candidates, against the written plan, and picked it; the code was corrected to match the plan, and gradient boosting stays a reference.)
 
-**Official test set (checked once), then the retraining gate:** NASA per engine 3.07 vs 4.05 (−24%), RMSE 14.2 vs 15.6, MAE 10.4 vs 11.3, C-index 0.877 vs 0.864; the late rate rises from 56% to 61% but late errors are smaller. Exported as a challenger, it passed all four gate rules, with interval coverage unchanged (the interval never uses the point estimate), so it is now FD001's deployed recipe (`POINT_MODEL_BY_SUBSET`). It adds a 1.5 MB model. FD004 keeps the RSF-only point estimate; the same experiment there is the next step.
+**Official test set (checked once), then the retraining gate:** NASA per engine 3.07 vs 4.05 (−24%), RMSE 14.2 vs 15.6, MAE 10.4 vs 11.3, C-index 0.877 vs 0.864; the late rate rises from 56% to 61% but late errors are smaller. Exported as a challenger, it passed all four gate rules, with interval coverage unchanged (the interval never uses the point estimate), so it is now FD001's deployed recipe (`POINT_MODEL_BY_SUBSET`). It adds a 1.5 MB model.
+
+### The same experiment on FD004: failed the rule, recorded, not deployed (notebook 19)
+
+Same candidates (RSF vs the blend, gradient boosting alone as reference), same protocol, same rule, FD004's deployed settings (leaf 5, `row_stride=15`, regime normalization).
+
+| Cross-validation (FD004) | NASA / point | ≤150 cycles left | RMSE | Folds won (overall) | Folds won (≤150) |
+|---|---|---|---|---|---|
+| RSF (deployed) | 140,773 | 14.86 | 37.2 | — | — |
+| Blend RSF + gradient boosting | 148,822 | **9.24** | **36.0** | 3 (4 required) | **5** |
+| Gradient boosting (reference) | 158,237 | 7.86 | 35.4 | — | — |
+
+**The blend failed rules (a) and (b), so FD004 keeps RSF.** It passed (c) and (d). **Why it failed:** FD004 engines live up to 543 cycles, so cross-validation scores points up to 366 cycles from failure, where every model predicts just under the 125-cycle cap and the early penalty grows exponentially: 99.99% of the overall score comes from points with more than 150 cycles left, and 95% from one held-out point (engine #118, 366 cycles left; RSF 119.9, blend 119.2). FD001 shows the same effect more mildly (92% from points beyond 150, longest 241), which is why notebook 18 already had rule (c).
+
+**Official test set, scored once for the record:** NASA per engine 19.2 vs 22.4, RMSE 26.8 vs 28.2, C-index 0.876 vs 0.862, near-failure late errors above 10 cycles 9 vs 12. Better on every metric, but the rule set before the run decides, and rewriting a rule after it failed and after the test set was seen would turn the protocol into a formality. **For future experiments** rules (a) and (b) should score only points with at most 150 cycles left (or use a capped penalty); re-running this one under the corrected rule on the same, already-seen data would not be independent evidence.
 
 ---
 
@@ -296,7 +310,7 @@ The width lands on engines predicted healthy (FD004 median 128 → 217 cycles); 
 
 ## 10. Deployment: a FastAPI service + dashboard, live on Streamlit Community Cloud
 
-**Model pairing, driven by the evaluation above:** RSF supplies the point estimate and risk ranking (best NASA score, best concordance; on FD001 averaged with gradient boosting since notebook 18); **the confidence interval combines RSF and Weibull AFT** (section 9): its lower bound is the more cautious of the two, since Weibull's alone promises too much life near failure, and its upper bound is Weibull's, since RSF can't extrapolate past its training ceiling. Cox PH isn't deployed: RSF beats it on every point-estimate and ranking metric, and Cox produces no natural interval to compete with Weibull's. (Against Weibull alone, Cox is not uniformly worse — on FD001 it has the better test C-index, RMSE and MAE, and on FD004 the better RMSE and NASA score — but neither is the deployed point model.) Applies per-subset: FD001 and FD004 each get their own RSF + Weibull pair.
+**Model pairing, driven by the evaluation above:** RSF supplies the point estimate and risk ranking (best NASA score, best concordance; on FD001 averaged with gradient boosting since notebook 18; FD004 keeps RSF alone, notebook 19); **the confidence interval combines RSF and Weibull AFT** (section 9): its lower bound is the more cautious of the two, since Weibull's alone promises too much life near failure, and its upper bound is Weibull's, since RSF can't extrapolate past its training ceiling. Cox PH isn't deployed: RSF beats it on every point-estimate and ranking metric, and Cox produces no natural interval to compete with Weibull's. (Against Weibull alone, Cox is not uniformly worse — on FD001 it has the better test C-index, RMSE and MAE, and on FD004 the better RMSE and NASA score — but neither is the deployed point model.) Applies per-subset: FD001 and FD004 each get their own RSF + Weibull pair.
 
 **In the Docker deployment: two separate services communicating over HTTP.** `api/main.py` (FastAPI) owns every model artifact and all scoring logic; `app/streamlit_app.py` holds no model artifacts and calls the API's `/predict`, `/subsets`, and `/subsets/{subset}/metadata` endpoints over plain HTTP, using `API_BASE_URL` (an environment variable, not a hardcoded address) to find it — `http://localhost:8000` for local development, or `http://api:8000` under Docker Compose's service-name DNS. A direct, measurable consequence: the dashboard image's dependency list (`requirements-app.txt`) doesn't include scikit-learn, scikit-survival, or lifelines at all, and the model code is only imported lazily in embedded mode (below) — so in the Docker deployment the dashboard cannot load a model at all.
 

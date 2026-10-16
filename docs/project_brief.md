@@ -85,7 +85,7 @@ Models are benchmarked as a ladder of increasing flexibility, each included with
 
 **Censoring the capped rows — tested and rejected.** With the cap, every training row keeps `event=1`, including the 8,131 of 20,631 FD001 rows sitting at the cap, which are therefore labeled as failing in exactly 125 cycles when their true remaining life is longer. The statistically cleaner alternative — marking those rows censored at 125 (`labeling.build_train_survival_frame(..., censor_above_cap=True)`) — was tested: Cox improved slightly and RSF was unchanged, but Weibull AFT broke (FD001 NASA score from ~1.3×10³ to ~2×10¹⁰, 90% interval width from ~100 to 184 cycles). Since Weibull supplies the deployed interval, the default stays all-`event=1`.
 
-**Deployment model selection:** Random Survival Forest for point estimate and risk ranking, Weibull AFT for the confidence interval — as originally anticipated in this section, and confirmed by the full evaluation in Phase 6. Notebook 18 later refined the point estimate for FD001: averaging RSF with a gradient-boosted regressor was selected on cross-validation by NASA score (−24% on the test set) and promoted by the retraining gate; FD004 keeps RSF alone. A later subgroup check (notebooks 14–15) refined the interval: its upper bound stays Weibull's, but its lower bound is now the more cautious of Weibull's and RSF's, because Weibull's alone promised too much life to engines close to failure.
+**Deployment model selection:** Random Survival Forest for point estimate and risk ranking, Weibull AFT for the confidence interval — as originally anticipated in this section, and confirmed by the full evaluation in Phase 6. Notebook 18 later refined the point estimate for FD001: averaging RSF with a gradient-boosted regressor was selected on cross-validation by NASA score (−24% on the test set) and promoted by the retraining gate. The same experiment on FD004 (notebook 19) failed the pre-set rule because of a measurement artifact and was recorded, not deployed, so FD004 keeps RSF alone. A later subgroup check (notebooks 14–15) refined the interval: its upper bound stays Weibull's, but its lower bound is now the more cautious of Weibull's and RSF's, because Weibull's alone promised too much life to engines close to failure.
 
 ---
 
@@ -170,7 +170,8 @@ turbofan-rul/
 │   ├── 15_interval_fix.ipynb                   # added: near-failure fix, selected on training data
 │   ├── 16_uncapped_upper_bound.ipynb           # added: training without the cap — measured, not deployed
 │   ├── 17_drift_monitoring.ipynb               # added: drift monitor replayed on FD001-FD004 fleets
-│   └── 18_point_estimate_candidates.ipynb      # added: cap / blend candidates by NASA score; blend deployed
+│   ├── 18_point_estimate_candidates.ipynb      # added: cap / blend candidates by NASA score; blend deployed
+│   └── 19_fd004_point_estimate.ipynb           # added: the blend on FD004 — failed the rule, recorded, not deployed
 ├── src/turbofan_rul/
 │   ├── data_loading.py                 # all 4 subsets, not just FD001
 │   ├── features.py                     # rolling stats, trends, health index, regime clustering

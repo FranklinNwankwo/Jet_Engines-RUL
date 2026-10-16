@@ -32,7 +32,8 @@ This is the "how did we get here" document; every phase, what triggered it, what
 26. [Phase 25: training without the cap, measured and not deployed](#26-phase-25-training-without-the-cap-measured-and-not-deployed)
 27. [Phase 26: the operations layer — versions, drift, retraining gate](#27-phase-26-the-operations-layer--versions-drift-retraining-gate)
 28. [Phase 27: a better point estimate, decided by the gate](#28-phase-27-a-better-point-estimate-decided-by-the-gate)
-29. [Where things stand](#29-where-things-stand)
+29. [Phase 28: the same experiment on FD004, recorded not deployed](#29-phase-28-the-same-experiment-on-fd004-recorded-not-deployed)
+30. [Where things stand](#30-where-things-stand)
 
 ---
 
@@ -369,12 +370,25 @@ Running the checks inside the containers, rather than from the runner, is what t
 
 ---
 
-## 29. Where things stand
+## 29. Phase 28: the same experiment on FD004, recorded not deployed
 
-**Done, verified with real execution:** the full survival-analysis framing and censoring argument; the complete model ladder (Cox → Weibull → RSF → two deep-learning architectures), each addition justified by the previous model's diagnostics; domain-appropriate evaluation (NASA score primary, RMSE secondary); 5-fold cross-validation confirming the ranking isn't a single-split artifact; generalization checks across three additional dataset subsets; hyperparameter tuning validated against both CV and the real official test set; a conformal-prediction fix for RSF's interval coverage, validated by subgroup rather than trusted in aggregate; the Phase 8/9 feature-scope leak, measured rather than left as a documented assumption; a properly separated two-service HTTP architecture, fresh-clone verified end to end (install → export → serve → test, from nothing); a full correctness review (Phase 18) with every notebook re-run; the survival framing tested under simulated censoring, with a mixed result reported as measured (Phase 20); a short README with results first and a full technical report (Phase 21); a redesigned dashboard live at [https://jetengines-rul.streamlit.app/](https://jetengines-rul.streamlit.app/) (Phase 19); 224 tests across 16 files run by GitHub Actions (Phase 22 onwards); both Docker images built and smoke-tested in CI (Phase 23); the deployed interval checked by subgroup at both ends of the remaining-life range, with a near-failure fix selected on training data (Phase 24); training without the cap measured for both the point estimate and the upper bound, and declined on cost-benefit grounds (Phase 25); versioned models, drift monitoring and a champion/challenger retraining gate (Phase 26); a blended point estimate selected by NASA score and promoted by that gate (Phase 27); and a README, project brief and architecture walkthrough that match the actual current state rather than the original plan.
+**Why:** after Phase 27 the two deployed models differed (FD001 blend, FD004 RSF) for no tested reason. FD004 has six operating conditions and two fault modes, so FD001's result couldn't simply be copied.
+
+**What was built:** `notebooks/19_fd004_point_estimate.ipynb`, notebook 18's candidates, protocol and rule unchanged, with FD004's deployed settings.
+
+**Result: the blend failed rules (a) and (b), so FD004 keeps RSF.** Cross-validated NASA 148,822 vs 140,773, winning 3 of 5 folds (4 required). A diagnostic showed what those numbers measure: 99.99% of the score comes from points more than 150 cycles from failure, where every model predicts just under the cap, and 95% from one held-out point (engine #118 with 366 cycles left; 119.9 vs 119.2 predicted). Where the model is used, the blend won all 5 folds (NASA 9.2 vs 14.9 at ≤150 cycles left), and the test set, scored once for the record, agreed (NASA 19.2 vs 22.4, RMSE 26.8 vs 28.2, C-index 0.876 vs 0.862).
+
+**The decision, and why:** not deployed. The rule was fixed before the run, and changing it after it failed, with the test result already seen, would make the protocol meaningless. The finding is kept instead: overall cross-validated NASA is unreliable when engines live far beyond the cap, so future rules should score only points with at most 150 cycles left. The two subsets now differ for a tested, documented reason.
+
+---
+
+## 30. Where things stand
+
+**Done, verified with real execution:** the full survival-analysis framing and censoring argument; the complete model ladder (Cox → Weibull → RSF → two deep-learning architectures), each addition justified by the previous model's diagnostics; domain-appropriate evaluation (NASA score primary, RMSE secondary); 5-fold cross-validation confirming the ranking isn't a single-split artifact; generalization checks across three additional dataset subsets; hyperparameter tuning validated against both CV and the real official test set; a conformal-prediction fix for RSF's interval coverage, validated by subgroup rather than trusted in aggregate; the Phase 8/9 feature-scope leak, measured rather than left as a documented assumption; a properly separated two-service HTTP architecture, fresh-clone verified end to end (install → export → serve → test, from nothing); a full correctness review (Phase 18) with every notebook re-run; the survival framing tested under simulated censoring, with a mixed result reported as measured (Phase 20); a short README with results first and a full technical report (Phase 21); a redesigned dashboard live at [https://jetengines-rul.streamlit.app/](https://jetengines-rul.streamlit.app/) (Phase 19); 224 tests across 16 files run by GitHub Actions (Phase 22 onwards); both Docker images built and smoke-tested in CI (Phase 23); the deployed interval checked by subgroup at both ends of the remaining-life range, with a near-failure fix selected on training data (Phase 24); training without the cap measured for both the point estimate and the upper bound, and declined on cost-benefit grounds (Phase 25); versioned models, drift monitoring and a champion/challenger retraining gate (Phase 26); a blended point estimate selected by NASA score and promoted by that gate (Phase 27), and the same experiment on FD004 failing the pre-set rule and kept undeployed (Phase 28); and a README, project brief and architecture walkthrough that match the actual current state rather than the original plan.
 
 **Genuinely outstanding — everything left, and nothing more:**
 
 - The operations layer is demonstrated on replays: no live traffic, the drift window resets when the API restarts, and the gate uses the official test set (fine for no-worse-than, not for choosing among challengers).
 - The public demo runs in one process (embedded mode), not as the two-service deployment — a free-hosting constraint (Phase 19). Its models must be re-uploaded to the Hugging Face repo after every re-export, with `app/requirements.txt`'s pins kept in step.
+- FD004's point estimate is RSF alone: the blend failed the pre-set rule on a measurement artifact (Phase 28). A fairer rule is recorded for future experiments; testing the blend under it needs data not already seen.
 - FD004 reuses FD001's hyperparameters by design (a transfer test). Its interval covers 73% of test engines above the 125-cycle cap — safe-side misses. An uncapped upper bound fixes them (Phase 25) and is ready to deploy if a use ever needs it.

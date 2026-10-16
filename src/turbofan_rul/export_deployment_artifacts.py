@@ -97,8 +97,8 @@ RSF_MIN_SAMPLES_LEAF_BY_SUBSET = {"FD001": 5, "FD004": 5}
 # Point-estimate options (notebook 18). "blend" adds gbm.joblib to the bundle.
 POINT_MODELS = ("rsf", "blend")
 # The deployed recipe per subset. FD001's blend was selected on cross-validation
-# and passed the retraining gate (notebook 18); FD004 wasn't part of that
-# experiment, so it stays RSF-only.
+# and passed the retraining gate (notebook 18). FD004 stays RSF-only: the same
+# experiment failed the pre-set rule there (notebook 19) and was not deployed.
 POINT_MODEL_BY_SUBSET = {"FD001": "blend", "FD004": "rsf"}
 GBM_PARAMS = {"max_iter": 300, "learning_rate": 0.05, "random_state": 0}
 
@@ -342,7 +342,7 @@ if __name__ == "__main__":
     parser.add_argument("--train-seed", type=int, default=0)
     parser.add_argument("--point-model", default=None, choices=list(POINT_MODELS),
                         help="rsf or blend (average of RSF and gradient boosting, notebook 18); "
-                             "default: the deployed recipe for the subset (FD001 blend, FD004 rsf)")
+                             "default: the deployed recipe for the subset (FD001 blend, FD004 rsf, notebook 19)")
     args = parser.parse_args()
 
     build_and_save(
