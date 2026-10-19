@@ -223,7 +223,7 @@ RMSE is the number C-MAPSS papers compare, but the decision metric here is the N
 
 The ≤150-cycle rule did its job: larger caps won overall only by predicting more life for very young engines, which the exponential early-prediction penalty rewards but which isn't where the model is used. (The first run's code had left gradient boosting alone among the candidates, against the written plan, and picked it; the code was corrected to match the plan, and gradient boosting stays a reference.)
 
-**Official test set (checked once), then the retraining gate:** NASA per engine 3.12 vs 4.05 (−23%), RMSE 14.2 vs 15.6, MAE 10.4 vs 11.3, C-index 0.877 vs 0.864; the late rate rises from 56% to 62% but late errors are smaller. Exported as a challenger, it passed all four gate rules, with interval coverage unchanged (the interval never uses the point estimate), so it is now FD001's deployed recipe (`POINT_MODEL_BY_SUBSET`). It adds a 1.5 MB model. (These are the repository's reproduced numbers. Gradient boosting's fit shifts slightly with numpy/pandas versions: a second environment gave NASA 3.07 and RMSE 14.16 for the same code; the RSF reproduces exactly.)
+**Official test set (checked once), then the retraining gate:** NASA per engine 3.12 vs 4.05 (−23%), RMSE 14.2 vs 15.6, MAE 10.4 vs 11.3, C-index 0.877 vs 0.864; the late rate rises from 56% to 62% but late errors are smaller (notebook 18, section 3b: engines late by more than 30 cycles 5 → 2, mean late error 11.3 → 9.2 cycles, worst late miss within 25 cycles of failure 21.9 → 16.4). Exported as a challenger, it passed all four gate rules, with interval coverage unchanged (the interval never uses the point estimate), so it is now FD001's deployed recipe (`POINT_MODEL_BY_SUBSET`). It adds a 1.5 MB model. (These are the repository's reproduced numbers. Gradient boosting's fit shifts slightly with numpy/pandas versions: a second environment gave NASA 3.07 and RMSE 14.16 for the same code; the RSF reproduces exactly.)
 
 ### The same experiment on FD004: failed the rule, recorded, not deployed (notebook 19)
 
@@ -349,7 +349,7 @@ turbofan-rul/
 ├── docker-compose.yml                 # local two-service orchestration
 ├── requirements-api.txt               # lean, API-only deps (no jupyter/matplotlib/tensorflow)
 ├── requirements-app.txt               # leaner still -- streamlit + pandas + requests, nothing ML
-├── tests/                             # 224 tests across 16 files
+├── tests/                             # 232 tests across 17 files
 └── models/
     ├── fd001/                         # RSF + Weibull + metadata for FD001
     └── fd004/                         # RSF + Weibull + regime-clustering artifacts for FD004
@@ -364,7 +364,7 @@ python -m turbofan_rul.export_deployment_artifacts --subset FD004   # optional -
 uvicorn api.main:app --reload                          # API on :8000
 API_BASE_URL=http://localhost:8000 streamlit run app/streamlit_app.py   # dashboard on :8501 (HTTP mode)
 MODELS_DIR=models streamlit run app/streamlit_app.py                    # or: no API, models loaded in-app
-pytest tests/ -v                                       # 224 tests
+pytest tests/ -v                                       # 232 tests
 
 # Containerized, both services:
 docker compose up --build
@@ -375,6 +375,8 @@ docker compose up --build
 `export_deployment_artifacts.py` exists as a standalone, deterministic script rather than relying on notebook state: model selection is already done by Phase 6, so the deployed models are refit on all training engines (not the 80% split used for evaluation) — there's no more reason to withhold data once the comparison is finished. FD001 uses its original, unmodified recipe (no clustering); FD004 additionally fits and saves the regime-clustering KMeans model and normalization stats, since inference needs to reproduce the exact same normalization at request time.
 
 `inference.py` is the single scoring function — called by the API, and by the dashboard only in its embedded (live-demo) mode, so both paths produce identical predictions. It flags when RSF's point estimate falls outside Weibull's own confidence interval: the two are independent models scoring the same input, nothing forces agreement, and a dashboard showing a point estimate outside its own interval looks broken unless that's labeled as an expected consequence of the two-model design rather than a bug. The API degrades gracefully if only FD001's artifacts have been built — FD004 support is optional, requested per-request via a `subset` field, and a request for a subset that hasn't been built returns a clear 422 rather than a crash.
+
+The risk level is the safety call, so it reads the cautious number: **critical** when the served interval's lower bound (or the point estimate, if lower) is under 20 cycles, **warning** when the point estimate is under 50, otherwise healthy. It originally used the point estimate alone, which contradicted deciding maintenance from the lower bound and, on out-of-fold training data, flagged only 91% (FD001) and 71% (FD004) of engines within 20 cycles of failure as critical. Using the lower bound for both bands was rejected: the interval is about 100 cycles wide, so the warning would fire on almost every engine. The split rule, chosen on that out-of-fold data, flags 100% of near-failure engines on both subsets while 90% / 93% of engines with 50+ cycles left still read healthy (6–10% get a false critical). Confirmed on the test sets: critical 13/13 (was 12/13) on FD001 and 40/40 (was 24/40) on FD004, with 4 and 10 false criticals among engines with 50+ cycles left. The thresholds themselves (20, 50) are an illustrative policy; a real deployment would set them from the maintenance lead time.
 
 ### Docker: built and smoke-tested in CI
 

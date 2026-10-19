@@ -124,6 +124,7 @@ $checks = @(
     @{ File = "notebooks\17_drift_monitoring.ipynb";         Text = "Own fleets: no drift windows" },
     @{ File = "notebooks\18_point_estimate_candidates.ipynb"; Text = "Selected on cross-validation: Blend RSF + GB, cap 125" },
     @{ File = "notebooks\18_point_estimate_candidates.ipynb"; Text = "Test-set rule -- blend NASA lower than deployed: PASSED" },
+    @{ File = "notebooks\18_point_estimate_candidates.ipynb"; Text = "Blend has no more large late errors (>20 and >30 cycles) than RSF alone: True" },
     @{ File = "notebooks\19_fd004_point_estimate.ipynb";     Text = "Selected on cross-validation: none -- the deployed RSF stays" },
     @{ File = "notebooks\19_fd004_point_estimate.ipynb";     Text = "Blend better at <= 150 cycles left in 5 of 5 folds" }
 )

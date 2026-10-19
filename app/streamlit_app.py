@@ -68,13 +68,17 @@ RECOMMENDED_MIN_HISTORY_CYCLES = 30
 
 # Display-only copy of the API's risk thresholds (inference.RISK_THRESHOLDS),
 # used to shade the risk zones on the RUL chart. The risk level itself always
-# comes from the API response, never from these numbers.
+# comes from the API response, never from these numbers: critical when the 90%
+# interval's lower bound is under 20 cycles, warning when the estimate is under 50.
 CRITICAL_BELOW, WARNING_BELOW = 20, 50
 
 RISK_STYLE = {
-    "critical": {"label": "Critical", "color": "#EF4444", "note": "Under 20 cycles left — schedule maintenance now."},
-    "warning": {"label": "Warning", "color": "#F5A524", "note": "Under 50 cycles left — plan maintenance soon."},
-    "healthy": {"label": "Healthy", "color": "#22C55E", "note": "50+ cycles left — no action needed yet."},
+    "critical": {"label": "Critical", "color": "#EF4444",
+                 "note": "Could fail within 20 cycles (90% lower bound) — schedule maintenance now."},
+    "warning": {"label": "Warning", "color": "#F5A524",
+                "note": "Best estimate under 50 cycles — plan maintenance soon."},
+    "healthy": {"label": "Healthy", "color": "#22C55E",
+                "note": "Best estimate 50+ cycles, lower bound above 20 — no action needed yet."},
 }
 
 SUBSET_INFO = {
@@ -425,7 +429,7 @@ def chart_legend(has_true_rul: bool) -> str:
     """Legend for rul_chart, as HTML: Vega-Lite legends need colour
     encodings, which rul_chart deliberately avoids."""
     items = [
-        '<span style="color:#F5A524;font-weight:700">━</span> Predicted (RSF)',
+        '<span style="color:#F5A524;font-weight:700">━</span> Predicted',
         '<span style="color:#38BDF8;font-weight:700">■</span> 90% interval',
         '<span style="color:#A78BFA;font-weight:700">■</span> RSF calibrated',
     ]
@@ -617,7 +621,8 @@ with st.sidebar:
             "cautious of the forest's and a **Weibull AFT** model's, so it doesn't promise "
             "too much life near failure; its upper bound is Weibull's, which can extrapolate "
             "beyond the 125-cycle training cap where the forest cannot.\n"
-            "5. Risk: critical < 20 cycles, warning < 50, otherwise healthy."
+            "5. Risk: **critical** if the interval's lower bound is under 20 cycles (the "
+            "engine could fail soon), **warning** if the estimate is under 50, otherwise healthy."
         )
     if EMBEDDED:
         st.caption(f"Models: `{MODEL_REPO or MODELS_DIR}` (in-app)")

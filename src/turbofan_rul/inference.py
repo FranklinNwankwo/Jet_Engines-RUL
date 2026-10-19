@@ -42,13 +42,35 @@ import pandas as pd
 
 from . import conformal, drift, features, interval_calibration, manifest, models
 
-# Risk-band thresholds on the RSF point estimate, in cycles. These are an
-# illustrative default policy, not a value learned from data -- a real
-# deployment would set these from the maintenance lead time actually
-# available (how long it takes to schedule and perform a replacement),
-# which this project has no data on. Documented here so they're easy to
-# find and override rather than buried as magic numbers in a request handler.
+# Risk-band thresholds, in cycles. These are an illustrative default policy,
+# not values learned from data -- a real deployment would set them from the
+# maintenance lead time actually available (how long it takes to schedule and
+# perform a replacement), which this project has no data on.
+#
+# Which number each band reads (risk_level_for):
+#   critical -- the served 90% interval's LOWER bound (or the point estimate,
+#               if lower) is under 20: the engine could plausibly fail within
+#               20 cycles. This is the safety call, so it uses the cautious
+#               bound, consistent with deciding maintenance from the lower bound.
+#   warning  -- the point estimate is under 50: a planning heads-up from the
+#               best guess.
+#   healthy  -- otherwise.
+# Why not the lower bound for both bands: the interval is ~100 cycles wide, so
+# its lower bound is under 50 for almost every engine and a lower-bound warning
+# would fire on nearly the whole fleet. On out-of-fold training data the rule
+# flags 100% of engines within 20 cycles of failure as critical (the point
+# estimate alone: 91% FD001, 71% FD004), while 90% (FD001) / 93% (FD004) of
+# engines with 50+ cycles left still read healthy.
 RISK_THRESHOLDS = {"critical": 20, "warning": 50}
+
+
+def risk_level_for(predicted_rul: float, interval_low: float) -> str:
+    """Risk band from the point estimate and the served interval's lower bound."""
+    if min(interval_low, predicted_rul) < RISK_THRESHOLDS["critical"]:
+        return "critical"
+    if predicted_rul < RISK_THRESHOLDS["warning"]:
+        return "warning"
+    return "healthy"
 
 SENSOR_COLS = [f"sensor_{i}" for i in range(1, 22)]
 
@@ -249,13 +271,6 @@ def predict_with_features(bundle: DeploymentBundle, readings: pd.DataFrame) -> t
         np.array([rsf_ci_low_raw]), np.array([rsf_ci_high_raw]), bundle.rsf_interval_correction
     )
 
-    if predicted_rul < RISK_THRESHOLDS["critical"]:
-        risk_level = "critical"
-    elif predicted_rul < RISK_THRESHOLDS["warning"]:
-        risk_level = "warning"
-    else:
-        risk_level = "healthy"
-
     # Round once, and compute the outside-interval flag from the same rounded
     # numbers the response returns -- otherwise a value within 0.05 of a bound
     # could be flagged one way while the displayed numbers say the other.
@@ -266,6 +281,9 @@ def predict_with_features(bundle: DeploymentBundle, readings: pd.DataFrame) -> t
     # scoring the same input, so nothing forces the RSF point estimate below
     # it. Surfaced explicitly rather than left for a viewer to notice unaided.
     point_outside_interval = not (ci_low_out <= predicted_rul_out <= ci_high_out)
+
+    # From the returned (rounded) numbers, so the band always matches what's shown.
+    risk_level = risk_level_for(predicted_rul_out, ci_low_out)
 
     result = {
         "subset": bundle.subset,

@@ -134,6 +134,12 @@ def test_predict_risk_level_is_valid(bundle, sample_readings):
     assert result["risk_level"] in {"critical", "warning", "healthy"}
 
 
+def test_predict_risk_level_matches_returned_numbers(bundle, sample_readings):
+    result = inference.predict(bundle, sample_readings)
+    expected = inference.risk_level_for(result["predicted_rul_cycles"], result["confidence_interval_90"][0])
+    assert result["risk_level"] == expected
+
+
 def test_predict_flags_point_outside_interval_when_true(bundle, sample_readings):
     result = inference.predict(bundle, sample_readings)
     low, high = result["confidence_interval_90"]
