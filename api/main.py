@@ -1,13 +1,11 @@
 """
-FastAPI service: recent sensor readings in, RUL + confidence interval +
-risk flag out.
+FastAPI service: recent sensor readings in, RUL + confidence interval + risk flag out.
 
-All scoring logic lives in `turbofan_rul.inference` -- this module is a thin
-HTTP wrapper around it. In the Docker deployment the Streamlit dashboard
-(`app/streamlit_app.py`) is a pure HTTP client of this API: it calls
-`/subsets`, `/subsets/{subset}/metadata` and `/predict` over HTTP and imports
-no modeling code itself. (The public demo runs the dashboard in embedded
-mode instead, calling the same `inference.predict` in-process.)
+All scoring logic lives in `turbofan_rul.inference`, this module is a thin HTTP wrapper around it. 
+
+In the Docker deployment the Streamlit dashboard (`app/streamlit_app.py`) is a pure HTTP client of this API: 
+it calls `/subsets`, `/subsets/{subset}/metadata` and `/predict` over HTTP and imports no modeling code itself. 
+(The public demo runs the dashboard in embedded mode instead, calling the same `inference.predict` in-process.)
 
 Every response that depends on a model carries its `model_version`
 (`manifest.py`), so a prediction can be traced to the exact artifacts,
@@ -44,7 +42,7 @@ _state: dict = {}
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Loaded once at startup, not per-request -- the deployed FD001 RSF
+    # Loaded once at startup, not per-request, the deployed FD001 RSF
     # artifact alone is ~200+ MB (min_samples_leaf=5 grows deep trees), and
     # re-loading it on every call would dominate latency.
     #
@@ -56,7 +54,7 @@ async def lifespan(app: FastAPI):
     # Checking the tracked file alone (an earlier version of this code did)
     # let startup get as far as attempting to load a model that was never
     # there, crashing with a raw FileNotFoundError instead of this clear
-    # message -- caught by an actual fresh-clone test, not assumed fixed.
+    # message, caught by an actual fresh-clone test, not assumed fixed.
     bundles = {}
     for subset in AVAILABLE_SUBSETS:
         subset_dir = MODELS_DIR / subset.lower()

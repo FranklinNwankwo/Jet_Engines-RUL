@@ -30,7 +30,7 @@ This is the "how did we get here" document; every phase, what triggered it, what
 24. [Phase 23: Docker, finally built](#24-phase-23-docker-finally-built)
 25. [Phase 24: the deployed interval, checked at the other end](#25-phase-24-the-deployed-interval-checked-at-the-other-end)
 26. [Phase 25: training without the cap, measured and not deployed](#26-phase-25-training-without-the-cap-measured-and-not-deployed)
-27. [Phase 26: the operations layer — versions, drift, retraining gate](#27-phase-26-the-operations-layer--versions-drift-retraining-gate)
+27. [Phase 26: the operations layer; versions, drift, retraining gate](#27-phase-26-the-operations-layer--versions-drift-retraining-gate)
 28. [Phase 27: a better point estimate, decided by the gate](#28-phase-27-a-better-point-estimate-decided-by-the-gate)
 29. [Phase 28: the same experiment on FD004, recorded not deployed](#29-phase-28-the-same-experiment-on-fd004-recorded-not-deployed)
 30. [Phase 29: every deep-model seed on the test set](#30-phase-29-every-deep-model-seed-on-the-test-set)
@@ -69,7 +69,7 @@ This is the "how did we get here" document; every phase, what triggered it, what
 
 ## 4. Phase 2: Labeling + feature engineering
 
-**What was built:** `labeling.py` (piecewise-linear RUL capped at 125 cycles; the standard C-MAPSS convention, since early-life cycles carry no degradation signal, plus the `(duration, event)` construction: every training row gets `event=1`, since every training engine runs to an observed failure, and `duration` = the row's remaining life capped at 125 — so the 8,131 of 20,631 FD001 rows at the cap are labeled as failing in exactly 125 cycles, a convention rather than their exact time-to-failure; see Phase 18 for the censored alternative, tested and rejected) and `features.py` (rolling mean/std/min/max/trend-slope across 5/15/30-cycle windows, EWMA, all strictly grouped per-engine so no window ever crosses an engine boundary, checked directly in tests, not just assumed).
+**What was built:** `labeling.py` (piecewise-linear RUL capped at 125 cycles; the standard C-MAPSS convention, since early-life cycles carry no degradation signal, plus the `(duration, event)` construction: every training row gets `event=1`, since every training engine runs to an observed failure, and `duration` = the row's remaining life capped at 125, so the 8,131 of 20,631 FD001 rows at the cap are labeled as failing in exactly 125 cycles, a convention rather than their exact time-to-failure; see Phase 18, "Tested and rejected — censoring the capped rows", for the censored alternative, which broke Weibull AFT; this is a different test from Phase 20's simulated fleet censoring) and `features.py` (rolling mean/std/min/max/trend-slope across 5/15/30-cycle windows, EWMA, all strictly grouped per-engine so no window ever crosses an engine boundary, checked directly in tests, not just assumed).
 
 **Why this labeling scheme:** it's the one detail that makes the survival framing real rather than decorative, the exact mechanism by which "we know this engine fails eventually" gets encoded without ever using the future.
 
@@ -121,19 +121,19 @@ This is the "how did we get here" document; every phase, what triggered it, what
 
 1. **RMSE and the NASA score disagree** about which of Cox/Weibull is better. Cox wins RMSE (22.01 vs 23.14); Weibull wins NASA score (1288.2 vs 1672.5) because its errors sit on the safer side. A comparison run on RMSE alone would have picked the wrong model for the actual maintenance decision.
 
-2. **RSF has the best NASA score AND the highest late-prediction rate (65%).** It's late more often but by smaller margins — the exponential penalty means many small late errors cost less than a few large ones.
+2. **RSF has the best NASA score AND the highest late-prediction rate (65%).** It's late more often but by smaller margins, the exponential penalty means many small late errors cost less than a few large ones.
 
 **Engine-level test concordance** (added in Phase 18, so every cross-model comparison uses the same metric): Cox 0.821, Weibull 0.818, RSF 0.864.
 
-**Deployment decision, made here:** RSF for point estimate/ranking, **Weibull AFT for the confidence interval** (RSF's own intervals under-cover at 86%, and RSF can't extrapolate past its training ceiling). Cox isn't deployed: RSF beats it on every point-estimate and ranking metric, and it has no natural interval. (Against Weibull, Cox isn't uniformly worse — it has the better test C-index, RMSE and MAE — but neither is the deployed point model.)
+**Deployment decision, made here:** RSF for point estimate/ranking, **Weibull AFT for the confidence interval** (RSF's own intervals under-cover at 86%, and RSF can't extrapolate past its training ceiling). Cox isn't deployed: RSF beats it on every point-estimate and ranking metric, and it has no natural interval. (Against Weibull, Cox isn't uniformly worse, it has the better test C-index, RMSE and MAE, but neither is the deployed point model.)
 
 ---
 
-## 9. Phase 7: Deep survival model (stretch) — the phase with the most course-correction
+## 9. Phase 7: Deep survival model (stretch), the phase with the most course-correction
 
 This phase went through three distinct versions, which is worth tracing since it's the clearest example of the project's iterate-until-complete pattern.
 
-**v1 — from-scratch NumPy MLP.** Built a discrete-time hazard neural net entirely in NumPy — forward pass, hand-derived backprop, gradient-checked against finite differences.
+**v1 — from-scratch NumPy MLP.** Built a discrete-time hazard neural net entirely in NumPy; forward pass, hand-derived backprop, gradient-checked against finite differences.
 
 **v2 — Keras LSTM.** Used `tensorflow-cpu`, a genuine CPU-only PyPI package. Rebuilt around an actual `keras.layers.LSTM`, with the NumPy work repositioned as validation of the loss function (cross-checked to produce the identical value as the Keras loss on identical inputs) rather than the deliverable itself. Caught a real overfitting problem in the process, 150 fixed epochs scored *worse* than 80, fixed with early stopping on validation loss.
 
@@ -147,7 +147,7 @@ This phase went through three distinct versions, which is worth tracing since it
 
 ## 10. Phase 8/9: Deployment (API + dashboard)
 
-**What was built:** `export_deployment_artifacts.py` (a standalone, deterministic script, not notebook state, that refits RSF + Weibull on **all** training engines, since the 80/20 split's job was evaluation, which is already done); `inference.py` (the single scoring function, at this point imported directly by both the API and the dashboard rather than duplicated — the dashboard moved to HTTP-only in Phase 15, then gained an optional embedded mode for the public demo in Phase 19); `api/main.py` (FastAPI, tested with real predictions and all error paths via `TestClient`); `app/streamlit_app.py` (verified end-to-end through headless-browser automation, not just "it started without crashing").
+**What was built:** `export_deployment_artifacts.py` (a standalone, deterministic script, not notebook state, that refits RSF + Weibull on **all** training engines, since the 80/20 split's job was evaluation, which is already done); `inference.py` (the single scoring function, at this point imported directly by both the API and the dashboard rather than duplicated, the dashboard moved to HTTP-only in Phase 15, then gained an optional embedded mode for the public demo in Phase 19); `api/main.py` (FastAPI, tested with real predictions and all error paths via `TestClient`); `app/streamlit_app.py` (verified end-to-end through headless-browser automation, not just "it started without crashing").
 
 **Real bug caught:** building the export script forced explicit enumeration of every column RSF needs, which surfaced that Phase 5's "full feature set" silently included raw passthrough values for all 21 sensors and 3 operating settings, not just the 12 Phase 1 flagged as informative. **Decision at the time:** keep the model exactly as evaluated (retraining then would have invalidated the reported Phase 6 numbers), document the gap in three places, and adjust the API contract to require the raw telemetry the model actually needs. **Later measured, not left as an assumption — see Phase 17.**
 
@@ -185,9 +185,9 @@ This phase went through three distinct versions, which is worth tracing since it
 
 ## 14. Phase 13: hyperparameter tuning
 
-**What was built:** Cox/Weibull penalizer search across a full 5-fold grid — the existing default (0.1) turned out already near-optimal, confirmed rather than assumed. For RSF, `max_features="sqrt"` clearly beat `"log2"`; a narrower single-fold search found leaf sizes 3, 5 and 8 tied, and `min_samples_leaf=5` was compared with the original default of 30 across all 5 folds.
+**What was built:** Cox/Weibull penalizer search across a full 5-fold grid; the existing default (0.1) turned out already near-optimal, confirmed rather than assumed. For RSF, `max_features="sqrt"` clearly beat `"log2"`; a narrower single-fold search found leaf sizes 3, 5 and 8 tied, and `min_samples_leaf=5` was compared with the original default of 30 across all 5 folds.
 
-**The cross-validation evidence (as re-run after the Phase 18 EWM fix) is mixed:** leaf=5 has the higher mean concordance (0.855 vs. 0.841) but wins only 2 of 5 folds — mostly from one big gain in fold 2 — and has about 2.5× the fold-to-fold variance (std 0.032 vs. 0.013), giving up the stability Phase 11 had flagged as one of RSF's virtues.
+**The cross-validation evidence (as re-run after the Phase 18 EWM fix) is mixed:** leaf=5 has the higher mean concordance (0.855 vs. 0.841) but wins only 2 of 5 folds — mostly from one big gain in fold 2, and has about 2.5× the fold-to-fold variance (std 0.032 vs. 0.013), giving up the stability Phase 11 had flagged as one of RSF's virtues.
 
 **So it was checked on the official FD001 test set, like-for-like** (both trained on all 100 engines, same stride): leaf=5 was better on every metric — C-index 0.859 → 0.864, NASA score per engine 4.51 → 4.04, MAE 12.0 → 11.3, RMSE 16.3 → 15.5, late rate 62% → 57%, coverage 86% → 87% — mostly by small margins. Deployed on that basis, with the weak CV support stated. A cost not shown in that table: the tuned model's file size grew from ~44MB to ~216MB (smaller leaves mean deeper, larger trees).
 
@@ -199,7 +199,7 @@ This phase went through three distinct versions, which is worth tracing since it
 
 **What was built:** cross-conformal prediction (`conformal.py`) — each of the 100 training engines scored by a model fit on the other 4 folds, pooling calibration data without holding any engine out of the final deployed model. Calibrated correction: 5.00 cycles, added to both interval bounds (re-run in Phase 18 with the fold models using the deployed `row_stride=3`, so the notebook's correction matches the deployed artifact's exactly).
 
-**Validated on the real official test set, and here's where it got interesting:** coverage moved from 0.870 to almost exactly 0.900 — it held on unseen engines, not just on the calibration set, though as an empirical result rather than a guarantee. In aggregate, the calibrated RSF interval now looked *strictly better* than the deployed Weibull interval: better coverage (0.900 vs. 0.890) and 40% narrower (59.6 vs. 98.6 cycles mean width). That would have justified simplifying the whole deployment to RSF alone, except checking by subgroup (the same instinct behind Phase 6's calibration-by-risk-bin analysis) found the aggregate number was hiding a near-total failure: coverage on the 11 engines above RSF's structural training-time ceiling collapsed to 27.3%, versus Weibull's 90.9% on those same engines. A uniform correction can't manufacture support a model never had.
+**Validated on the real official test set, and here's where it got interesting:** coverage moved from 0.870 to almost exactly 0.900; it held on unseen engines, not just on the calibration set, though as an empirical result rather than a guarantee. In aggregate, the calibrated RSF interval now looked *strictly better* than the deployed Weibull interval: better coverage (0.900 vs. 0.890) and 40% narrower (59.6 vs. 98.6 cycles mean width). That would have justified simplifying the whole deployment to RSF alone, except checking by subgroup (the same instinct behind Phase 6's calibration-by-risk-bin analysis) found the aggregate number was hiding a near-total failure: coverage on the 11 engines above RSF's structural training-time ceiling collapsed to 27.3%, versus Weibull's 90.9% on those same engines. A uniform correction can't manufacture support a model never had.
 
 **Decision:** Weibull stays the primary deployed interval, this result *confirmed* the original Phase 6 pairing for a reason now demonstrated, not assumed. The calibrated RSF interval ships as a clearly-labeled, explicitly non-authoritative supplementary field. The export script computes the correction for every subset it builds, FD004 included (36.00 cycles), though FD004's calibrated coverage wasn't checked on its test set until Phase 24, which also changed the deployed interval.
 
@@ -211,7 +211,7 @@ This phase went through three distinct versions, which is worth tracing since it
 
 **A direct, measurable consequence of that refactor:** splitting `requirements.txt` into `requirements-api.txt` and `requirements-app.txt` showed the dashboard's dependency list no longer needed scikit-learn, scikit-survival, or lifelines at all, it literally cannot load a model anymore, by construction. (Still true of the Docker dashboard image; Phase 19 added a separate, opt-in embedded mode for the public demo.)
 
-**Docker: written, honestly not verified.** Separate Dockerfiles for the API (bakes the FD001 model in at build time, accepting a slow build for an instant start — FD004 added in Phase 18) and the dashboard (lean, zero ML dependencies), plus a `docker-compose.yml`. Installing Docker itself and starting its daemon worked fine in this sandbox — but every `docker build` failed with a 403 on the base-image pull, from both Docker Hub and GHCR. The sandbox's network allowlist covers package registries (PyPI, npm, GitHub) but no container registry at all. Disclosed directly rather than claimed as working: this is the one piece of the project that was written to standard patterns and reasoned through, but not executed until Phase 23 built it in CI.
+**Docker: written here, verified later in CI (Phase 23).** Separate Dockerfiles for the API (bakes the FD001 model in at build time, accepting a slow build for an instant start — FD004 added in Phase 18) and the dashboard (lean, zero ML dependencies), plus a `docker-compose.yml`. This is the one piece of the project that was written to standard patterns and reasoned through, but not executed until Phase 23 built it in CI.
 
 ---
 
@@ -221,17 +221,17 @@ This phase went through three distinct versions, which is worth tracing since it
 
 **Two real bugs, invisible until this exact test.** Both `api/main.py`'s startup check and `test_inference.py`'s skip condition inferred "is a model built?" from the presence of `deployment_metadata.json`, a small file that IS tracked in git. The actual model (`rsf.joblib`) is not. Fixed in both places to check for `rsf.joblib` directly.
 
-**Re-verified for real, not just patched and assumed fixed:** a full FD001 export run from the fresh clone (genuine downloads, confirmed by the log — nothing cached), the API starting and serving a live prediction over HTTP, and the complete test suite; every result identical to the main development environment, including the exact same conformal correction (5.00 cycles) and the exact same point prediction (116.9 cycles) seen throughout this entire project. `project_brief.md` and this document were both updated to reflect that this gap is closed, and the README gained a fifth documented bug.
+**Re-verified for real, not just patched and assumed fixed:** a full FD001 export run from the fresh clone (genuine downloads, confirmed by the log, nothing cached), the API starting and serving a live prediction over HTTP, and the complete test suite; every result identical to the main development environment, including the exact same conformal correction (5.00 cycles) and the exact same point prediction (116.9 cycles) seen throughout this entire project. `project_brief.md` and this document were both updated to reflect that this gap is closed, and the README gained a fifth documented bug.
 
 ---
 
 ## 18. Phase 17: measuring the Phase 8/9 feature-scope bug instead of just documenting it
 
-**What prompted it:** a direct challenge to the Phase 8/9 decision — "keep the model as evaluated, document the gap" was pragmatic, not evidenced. No one had ever measured how much the leak actually mattered, and every phase since (CV, tuning, calibration) had silently inherited the same confounded feature set. A proposal to restrict RSF to Cox/Weibull's exact 25-column curated set was considered and set aside: that would strip not just the 24 columns that were never supposed to be there, but 180 of RSF's 205 legitimately-scoped engineered columns too — a materially different, narrower experiment than fixing the actual bug.
+**What prompted it:** a direct challenge to the Phase 8/9 decision. How much the leak actually mattered has not been measured, and every phase since (CV, tuning, calibration) had silently inherited the same confounded feature set. A proposal to restrict RSF to Cox/Weibull's exact 25-column curated set was considered and set aside: that would strip not just the 24 columns that were never supposed to be there, but 180 of RSF's 205 legitimately-scoped engineered columns too, a materially different, narrower experiment than fixing the actual bug.
 
 **What was measured:** a second RSF, identical hyperparameters (`min_samples_leaf=5`, matching the Phase 13-tuned deployed model), fit on the corrected 205-column engineered-only feature set, evaluated against the same official FD001 test set as the deployed 229-column model. Every metric moved by less than ordinary random-forest run-to-run variance, in no consistent direction: C-index −0.0004, NASA score actually 0.065 *better*, MAE +0.09, late rate +0.03, coverage −0.03. The "plausible, given tree ensembles' random per-split feature subsampling" hypothesis from Phase 8/9, now confirmed with a number instead of asserted.
 
-**Decision:** nothing retrained, nothing rerun. Per the plan agreed before running the ablation — a negligible result means tightening the documentation, not redoing Phase 6, the CV baseline, tuning, or calibration on a corrected model. `README.md`'s bug #1 now reports this comparison in place of the earlier unmeasured "documenting the gap" language (added in Phase 18 — an earlier version of this document said it had been added before it actually was). The ablation was run on the full training frame, which the Phase 18 EWM bug didn't affect, so its numbers stand.
+**Decision:** nothing retrained, nothing rerun. Per the plan agreed before running the ablation, a negligible result means tightening the documentation, not redoing Phase 6, the CV baseline, tuning, or calibration on a corrected model. `README.md`'s bug #1 now reports this comparison in place of the earlier unmeasured "documenting the gap" language (added in Phase 18). The ablation was run on the full training frame, which the Phase 18 EWM bug didn't affect, so its numbers stand.
 
 ---
 
@@ -251,7 +251,7 @@ This phase went through three distinct versions, which is worth tracing since it
 - RSF calibration notebook aligned with the deployed recipe (`row_stride=3`).
 - Input validation tightened in `data_loading.py`, `evaluation.py` and `cross_validation.py` (which now raises instead of silently dropping engines).
 
-**Tested and rejected — censoring the capped rows.** `labeling.build_train_survival_frame(..., censor_above_cap=True)` marks rows above the 125-cycle cap as censored instead of failing at 125. Cox improved slightly and RSF was unchanged, but Weibull AFT broke (FD001 NASA score from ~1.3×10³ to ~2×10¹⁰, interval width ~100 → 184 cycles). Since Weibull supplies the deployed interval, the default stays all-`event=1`.
+**Tested and rejected: censoring the capped rows.** `labeling.build_train_survival_frame(..., censor_above_cap=True)` marks rows above the 125-cycle cap as censored instead of failing at 125. Cox improved slightly and RSF was unchanged, but Weibull AFT broke (FD001 NASA score from ~1.3×10³ to ~2×10¹⁰, interval width ~100 → 184 cycles). Since Weibull supplies the deployed interval, the default stays all-`event=1`, ie. uncensored.
 
 **Deployment:** `api/Dockerfile` now exports FD004 as well as FD001; both exports and the API serving both subsets were reproduced outside Docker in a clean Python 3.12 environment, and `docker compose config` accepts the compose file.
 
@@ -259,15 +259,13 @@ This phase went through three distinct versions, which is worth tracing since it
 
 ---
 
-## 20. Phase 19: dashboard redesign + public deployment
-
-**What prompted it:** the dashboard worked but looked like a default Streamlit page, and the project had no public URL.
+## 20. Phase 19: dashboard redesign + public deployment.
 
 **The redesign.** A theme in `.streamlit/config.toml` (dark navy/amber "engine console" palette, Inter / Space Grotesk / JetBrains Mono fonts) and a rebuilt `app/streamlit_app.py`: headline cards for predicted RUL, the Weibull interval and a colour-coded risk level; one "where this engine sits" chart showing the point estimate, both intervals and the true RUL against shaded risk zones; per-sensor small multiples with a rolling-mean trend; an example-CSV download on the upload tab; and results that persist across reruns. Charts use Altair (ships with Streamlit). Checked in a headless browser on desktop and phone widths; two chart bugs found that way were fixed (interval bars not drawing because layers shared a colour scale, and labels colliding). Testing the new charts on older Streamlit versions showed `st.altair_chart(width=...)` needs 1.51, so the floor moved from 1.50 to 1.51.
 
 **The hosting decision.** The obvious free host for the API, a Hugging Face Docker Space, now requires a paid plan; Render's free tier (512MB) is too small for the ~340MB of models; Google Cloud Run needs a billing card. Streamlit Community Cloud is free but only runs a Streamlit app. So the dashboard gained a second mode rather than the project gaining a paid service: when `API_BASE_URL` is unset and `MODEL_REPO` is set, it downloads the exported `fd001/` and `fd004/` folders from a public Hugging Face model repo and calls `inference.predict` in-process. The model code is imported lazily, so the Docker dashboard image (HTTP mode) still never installs it. Measured first: both bundles load in ~0.6GB and about 1.5s, comfortably inside Community Cloud's limits.
 
-**A real problem caught before it shipped:** the first embedded-mode test failed to load the Weibull model — test models pickled under pandas 3 could not be unpickled under pandas 2. Pickled scikit-learn/scikit-survival/lifelines models are tied to the library versions that saved them, so `app/requirements.txt` (the file Community Cloud reads, which sits next to the entrypoint and so takes precedence over the root `requirements.txt`) pins those libraries to the export environment's exact versions; the app now reports a version mismatch clearly instead of crashing. A second version issue surfaced during deployment: a fresh local venv had silently been created with Python 3.14, which TensorFlow doesn't support yet and which forced a newer numpy; the venv was rebuilt on Python 3.11, the models re-exported in it, and the pins regenerated from its `pip freeze`, with Community Cloud set to 3.11 to match.
+**A real problem caught before it shipped:** the first embedded-mode test failed to load the Weibull model; test models pickled under pandas 3 could not be unpickled under pandas 2. Pickled scikit-learn/scikit-survival/lifelines models are tied to the library versions that saved them, so `app/requirements.txt` (the file Community Cloud reads, which sits next to the entrypoint and so takes precedence over the root `requirements.txt`) pins those libraries to the export environment's exact versions; the app now reports a version mismatch clearly instead of crashing. A second version issue surfaced during deployment: a fresh local venv had silently been created with Python 3.14, which TensorFlow doesn't support yet and which forced a newer numpy; the venv was rebuilt on Python 3.11, the models re-exported in it, and the pins regenerated from its `pip freeze`, with Community Cloud set to 3.11 to match.
 
 **Verified:** identical predictions in both modes (FD001 test engine 1: 121 cycles [52, 237]; FD004: 33 [13, 59]); HTTP mode re-tested in an environment with no ML libraries installed; the live app at [https://jetengines-rul.streamlit.app/](https://jetengines-rul.streamlit.app/) runs end to end. Housekeeping found along the way: research models that notebooks 03/04/05/07 save directly into `models/` weren't covered by `.gitignore` (now ignored), and `.gitignore`/`.dockerignore` had excluded the whole `.streamlit/` folder, which would have kept the theme off GitHub and out of Docker (now only `secrets.toml` is excluded).
 
@@ -275,19 +273,17 @@ This phase went through three distinct versions, which is worth tracing since it
 
 ## 21. Phase 20: testing the survival framing itself
 
-**What prompted it:** a review of the project pointed out that its central claim — survival analysis is necessary because of right censoring — had never been tested. Every C-MAPSS training engine runs to failure, and the only censoring ever tried (capped rows, Phase 18) was rejected, so the training data contained no censoring at all.
+**What prompted it:** a review of the project pointed out that its central claim; survival analysis is necessary because of right censoring, had never been tested. Every C-MAPSS training engine runs to failure, and the only censoring ever tried (capped rows, Phase 18) was rejected, so the training data contained no censoring at all.
 
 **What was built:** two helpers in `cross_validation.py` with 12 new tests. `sample_administrative_censoring` simulates a fleet observed up to a fixed date: each engine's observation window is drawn independently of its lifetime (non-informative censoring), with a fleet-wide scale set so an exact fraction of engines is censored. `build_censored_train_frame` truncates those engines and labels their rows (`event=0` inside the window, the usual capped `event=1` when the window reaches 125 cycles), hiding their true RUL. A test confirms that truncating after featurizing equals featurizing the truncated trajectories. `notebooks/13_censoring_experiment.ipynb` runs RSF, Cox, Weibull and two RSF-matched random-forest regressions ("drop unfinished engines" and "treat censoring as failure") at 0/25/50/75% censoring with 5 draws each, scored on the official test set, against a hypothesis and decision rule written into the notebook before it ran.
 
-**Real result — partly confirmed:** survival models decisively beat the "censoring = failure" regression (50% censoring: RMSE 17.3 vs 23.1, C-index 0.852 vs 0.839; that regression is biased about 12 cycles early, 22 at 75%). But the "drop unfinished engines" regression tied RSF on C-index and RMSE (0.851 / 17.4) and beat it on the NASA score (4.9 vs 5.7 per engine), because RSF drifts slightly late under censoring. The pre-registered rule — RSF beating *both* regressions by more than the noise — was not met. The explanation is the 125-cycle cap: rows far from failure share the same capped target, so discarding long-lived engines loses little. RSF's measured advantages are stability (C-index std across draws 0.003 vs 0.011 at 75%) and using all the data. Weibull, notably, did not blow up under engine-level censoring.
+**Real result, partly confirmed:** survival models decisively beat the "censoring = failure" regression (50% censoring: RMSE 17.3 vs 23.1, C-index 0.852 vs 0.839; that regression is biased about 12 cycles early, 22 at 75%). But the "drop unfinished engines" regression tied RSF on C-index and RMSE (0.851 / 17.4) and beat it on the NASA score (4.9 vs 5.7 per engine), because RSF drifts slightly late under censoring. The pre-registered rule; RSF beating *both* regressions by more than the noise, was not met. The explanation is the 125-cycle cap: rows far from failure share the same capped target, so discarding long-lived engines loses little. RSF's measured advantages are stability (C-index std across draws 0.003 vs 0.011 at 75%) and using all the data. Weibull, notably, did not blow up under engine-level censoring.
 
-**Decision:** nothing in the deployment changes — RSF + Weibull remain the best-supported pairing, and the Weibull interval is still something regression doesn't provide — but the README and brief now state the survival case as measured ("beats the naive regression; more stable; ties a careful one on accuracy here") rather than as an unqualified premise.
+**Decision:** nothing in the deployment changes; RSF + Weibull remain the best-supported pairing, and the Weibull interval is still something regression doesn't provide, but the README and brief now state the survival case as measured ("beats the naive regression; more stable; ties a careful one on accuracy here") rather than as an unqualified premise.
 
 ---
 
 ## 22. Phase 21: README rewritten for readers, detail moved to a technical report
-
-**What prompted it:** the README had grown to 320 lines of method detail, with the headline results around line 70 and a defensive tone ("checked, not assumed", "stated plainly") repeated throughout. A recruiter or interviewer reads the top of a README and stops.
 
 **What changed:** the README is now about 140 lines: a ten-line summary (problem, approach, headline result, deployment, the censoring finding, live link), a dashboard screenshot, a "Results at a glance" section with both result tables, five key findings, a short how-it-works section, run commands, limitations and links. The previous README's full content moved to `docs/technical_report.md`, with the defensive phrasing cut from 39 instances to 6 and the Docker disclosure condensed. No result or claim was changed.
 
@@ -295,7 +291,7 @@ This phase went through three distinct versions, which is worth tracing since it
 
 ## 23. Phase 22: continuous integration
 
-**What was built:** `.github/workflows/tests.yml` with two jobs. `unit-tests` installs `requirements.txt` on Python 3.11 and runs the whole suite on every push and pull request (model-dependent tests skip, as on a fresh clone). `live-demo-models` installs `app/requirements.txt` — exactly what Streamlit Community Cloud installs — downloads the models from the Hugging Face repo named in the `MODEL_REPO` repository variable, and runs the new `tests/test_dashboard_embedded.py`: the dashboard is started headlessly in embedded mode and makes real FD001 and FD004 predictions.
+**What was built:** `.github/workflows/tests.yml` with two jobs. `unit-tests` installs `requirements.txt` on Python 3.11 and runs the whole suite on every push and pull request (model-dependent tests skip, as on a fresh clone). `live-demo-models` installs `app/requirements.txt`, exactly what Streamlit Community Cloud installs, downloads the models from the Hugging Face repo named in the `MODEL_REPO` repository variable, and runs the new `tests/test_dashboard_embedded.py`: the dashboard is started headlessly in embedded mode and makes real FD001 and FD004 predictions.
 
 **Why the second job matters:** the live demo's main failure mode is the pinned library versions drifting away from the environment that exported the uploaded models. Checked both ways before shipping: with version-matched models all 4 embedded-mode tests pass; with models exported under pandas 3, 3 of 4 fail. The suite was then 150 tests across 11 files.
 
@@ -303,7 +299,7 @@ This phase went through three distinct versions, which is worth tracing since it
 
 ## 24. Phase 23: Docker, finally built
 
-**The gap:** since Phase 15 the Dockerfiles had been written and reasoned through but never built, because the sandbox blocked every container registry. That was the last claim in the project resting on reasoning rather than execution.
+**The gap:** since Phase 15 the Dockerfiles had been written and reasoned through but never built.
 
 **What was built:** a separate workflow, `.github/workflows/docker.yml`, kept out of `tests.yml` because the API image exports both models during its build. It runs `docker compose build`, starts both services with `docker compose up --wait` (gated on the API's healthcheck), waits for the dashboard's health endpoint, then pipes `scripts/docker_smoke_test.py` into each container:
 
@@ -346,9 +342,9 @@ Running the checks inside the containers, rather than from the runner, is what t
 
 ---
 
-## 27. Phase 26: the operations layer — versions, drift, retraining gate
+## 27. Phase 26: the operations layer; versions, drift, retraining gate
 
-**Why:** nothing tied a running model to how it was made, nothing noticed unfamiliar inputs, and nothing stopped a worse retrain from shipping. These are the questions an ML system design interview asks first.
+**Why:** nothing tied a running model to how it was made, nothing noticed unfamiliar inputs, and nothing stopped a worse retrain from shipping.
 
 **Versioning.** `manifest.py` writes a manifest per exported model: a version derived from the SHA-256 of the prediction files, the git commit, data hashes, library versions and test metrics measured through the serving path. Loading re-hashes and reports the version only if it still matches. `publish.py` compares local files with the hashes Hugging Face stores, uploads only what differs and tags the commit; the live demo is pinned with `MODEL_REVISION`, and its sidebar shows the version. The first real publish found that Weibull's pickle changes on every refit (lifelines records the fit time) while RSF's doesn't, so 1.75 MB were uploaded instead of ~350 MB. A bug was caught before that publish: `--full` would have uploaded every model file rather than only the changed ones.
 
@@ -362,7 +358,6 @@ Running the checks inside the containers, rather than from the runner, is what t
 
 ## 28. Phase 27: a better point estimate, decided by the gate
 
-**The question, reframed:** "make RMSE better" became "improve the point estimate, judged by the NASA score first", the same priority the gate enforces, after a fair challenge that RMSE isn't this project's primary metric (it's the number papers compare).
 
 **What was built:** `notebooks/18_point_estimate_candidates.ipynb`. It breaks down the error first (11% of test engines, those above the cap, carry a quarter of RSF's squared error), then compares candidates fixed in advance on the project's cross-validation: four caps, and an RSF + gradient-boosting average, with gradient boosting alone as a reference. The rule required a ≥ 5% NASA gain, 4 of 5 folds, no loss on points ≤ 150 cycles from failure, and RMSE within 5%. That third condition was written for a predicted trap and caught it: caps 135 and 145 won overall only by predicting more life for very young engines.
 
@@ -396,7 +391,7 @@ Running the checks inside the containers, rather than from the runner, is what t
 
 ## 31. Phase 30: the risk flag reads the lower bound; late-error severity
 
-**Why:** two questions an interviewer would ask. The risk level (critical / warning / healthy) was computed from the point estimate, while the project argues maintenance decisions should run off the interval's lower bound. And the blend is late on more engines than RSF alone, with no measurement of how late.
+**Why:** The risk level (critical / warning / healthy) was computed from the point estimate, while the project argues maintenance decisions should run off the interval's lower bound. And the blend is late on more engines than RSF alone, with no measurement of how late.
 
 **The risk flag.** Moving both bands to the lower bound was measured first and rejected: the interval is about 100 cycles wide, so only 4 of FD001's 70 truly healthy test engines would have read healthy. The rule chosen on out-of-fold training data: **critical** when the lower bound (or the point estimate, if lower) is under 20 cycles, **warning** when the point estimate is under 50. Out of fold it flags 100% of engines within 20 cycles of failure (the old rule: 91% FD001, 71% FD004) while 90% / 93% of engines with 50+ cycles left read healthy. On the test sets: FD004 critical recall 24/40 → 40/40, FD001 12/13 → 13/13, at 10 and 4 false criticals. `inference.risk_level_for`, 8 new tests, dashboard wording updated. No model changes, so model versions are unchanged.
 
@@ -408,9 +403,12 @@ Running the checks inside the containers, rather than from the runner, is what t
 
 **Done, verified with real execution:** the full survival-analysis framing and censoring argument; the complete model ladder (Cox → Weibull → RSF → two deep-learning architectures), each addition justified by the previous model's diagnostics; domain-appropriate evaluation (NASA score primary, RMSE secondary); 5-fold cross-validation confirming the ranking isn't a single-split artifact; generalization checks across three additional dataset subsets; hyperparameter tuning validated against both CV and the real official test set; a conformal-prediction fix for RSF's interval coverage, validated by subgroup rather than trusted in aggregate; the Phase 8/9 feature-scope leak, measured rather than left as a documented assumption; a properly separated two-service HTTP architecture, fresh-clone verified end to end (install → export → serve → test, from nothing); a full correctness review (Phase 18) with every notebook re-run; the survival framing tested under simulated censoring, with a mixed result reported as measured (Phase 20); a short README with results first and a full technical report (Phase 21); a redesigned dashboard live at [https://jetengines-rul.streamlit.app/](https://jetengines-rul.streamlit.app/) (Phase 19); 232 tests across 17 files run by GitHub Actions (Phase 22 onwards); both Docker images built and smoke-tested in CI (Phase 23); the deployed interval checked by subgroup at both ends of the remaining-life range, with a near-failure fix selected on training data (Phase 24); training without the cap measured for both the point estimate and the upper bound, and declined on cost-benefit grounds (Phase 25); versioned models, drift monitoring and a champion/challenger retraining gate (Phase 26); a blended point estimate selected by NASA score and promoted by that gate (Phase 27), and the same experiment on FD004 failing the pre-set rule and kept undeployed (Phase 28); every deep-model seed scored on the test set (Phase 29); the risk flag tied to the interval's lower bound, and the blend's late errors measured by size (Phase 30); and a README, project brief and architecture walkthrough that match the actual current state rather than the original plan.
 
-**Genuinely outstanding — everything left, and nothing more:**
+**Genuinely outstanding; everything left, and nothing more:**
 
 - The operations layer is demonstrated on replays: no live traffic, the drift window resets when the API restarts, and the gate uses the official test set (fine for no-worse-than, not for choosing among challengers).
-- The public demo runs in one process (embedded mode), not as the two-service deployment — a free-hosting constraint (Phase 19). Its models must be re-uploaded to the Hugging Face repo after every re-export, with `app/requirements.txt`'s pins kept in step.
+
+- The public demo runs in one process (embedded mode), not as the two-service deployment, not a first choice, but a free-hosting constraint (Phase 19). Its models must be re-uploaded to the Hugging Face repo after every re-export, with `app/requirements.txt`'s pins kept in step.
+
 - FD004's point estimate is RSF alone: the blend failed the pre-set rule on a measurement artifact (Phase 28). A fairer rule is recorded for future experiments; testing the blend under it needs data not already seen.
+
 - FD004 reuses FD001's hyperparameters by design (a transfer test). Its interval covers 73% of test engines above the 125-cycle cap — safe-side misses. An uncapped upper bound fixes them (Phase 25) and is ready to deploy if a use ever needs it.

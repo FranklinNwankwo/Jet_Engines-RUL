@@ -2,7 +2,7 @@
 
 **Live demo: [jetengines-rul.streamlit.app](https://jetengines-rul.streamlit.app/)** — pick a test engine and click *Predict remaining life* (the first load after a quiet period takes a minute or two).
 
-- **Problem:** predict how many cycles a jet engine has left before failure, from 21 sensor readings per cycle (NASA C-MAPSS), with an uncertainty interval — not just a number.
+- **Problem:** predict how many cycles a jet engine has left before failure, from 21 sensor readings per cycle (NASA C-MAPSS), with an uncertainty interval, not just a number.
 - **Approach:** framed as survival analysis (time-to-failure), comparing Cox PH, Weibull AFT, a Random Survival Forest and two deep hazard networks.
 - **Headline result:** the Random Survival Forest wins on NASA's official FD001 test set — **test C-index 0.864, mean error 11.3 cycles, NASA score 4.0 per engine**, a NASA score 2.8× better than Weibull's and 3.6× better than Cox's. The lead holds across 5-fold cross-validation and on the harder FD004 subset. Averaged with a gradient-boosting regressor, the deployed FD001 point estimate improves to **NASA 3.12 per engine, RMSE 14.2, C-index 0.877** (selected on cross-validation, promoted by the retraining gate).
 - **Deployed:** RSF gives the prediction (on FD001, averaged with gradient boosting); the 90% interval combines RSF and Weibull AFT (lower bound = the more cautious of RSF's and Weibull's, upper bound = Weibull's), because each model's interval fails at one end of the remaining-life range. Served by a FastAPI service and a Streamlit dashboard.
@@ -58,10 +58,15 @@ All numbers are for the exported models, measured through the same `inference.pr
 ## 2. Key findings
 
 1. **RMSE would have picked the wrong model.** On FD001, Cox beats Weibull on RMSE (22.0 vs 23.1), but Weibull beats Cox on the NASA score (1288 vs 1673), because its errors fall on the safe (early) side. The asymmetric NASA score is the primary metric here: a late prediction means an engine fails in service.
+
 2. **The best model is also the most often late.** RSF has the best NASA score *and* the highest late-prediction rate (65%). Its late errors are small, and the NASA penalty grows exponentially, so many small errors cost less than a few large ones.
+
 3. **Both intervals failed a subgroup check, at opposite ends.** Conformal calibration brought RSF's 90% interval to exactly 90% overall coverage, 40% narrower than Weibull's, but it covered only 27% of engines above the 125-cycle training cap (Weibull: 91%). A later check of the deployed Weibull interval found the reverse: it covered only 58% of engines within 25 cycles of failure, and every miss promised more life than the engine had. The served interval now takes the more cautious lower bound of the two models and Weibull's upper bound, selected on training data only: near-failure coverage went to 100% (FD001) and 94% (FD004) for about one cycle of extra width. [Details](docs/technical_report.md#9-interval-calibration-two-subgroup-checks-at-opposite-ends).
+
 4. **Survival vs. regression, measured.** With 50% of training engines censored, RSF gets RMSE 17.3. The regression that treats unfinished engines as failed gets 23.1 and predicts about 12 cycles too little life. The regression that drops unfinished engines ties RSF (17.4) and has a better NASA score, because the 125-cycle cap absorbs most of the bias from dropping them. RSF's measured edges are stability and using all the data. [Details](docs/technical_report.md#6-does-survival-analysis-actually-beat-regression-tested-with-a-mixed-answer).
+
 5. **A better point estimate, judged by the NASA score first.** The RSF's error is concentrated: the 11 test engines with more than 125 cycles left are 11% of engines but a quarter of its squared error (it can't predict past the cap). Of the candidates fixed in advance, larger caps "won" on cross-validation only by predicting more life for very young engines and were rejected by a rule aimed at exactly that; averaging RSF with gradient boosting won on every metric, passed the test-set check and the retraining gate, and is now deployed for FD001. It is late on more engines (62% vs 56%) but by less: engines late by more than 30 cycles fell from 5 to 2. [Details](notebooks/18_point_estimate_candidates.ipynb). The same experiment on FD004 failed the pre-set rule and was **not deployed**, although the blend was better wherever the model is used (all 5 folds at ≤150 cycles left; test NASA 19.4 vs 22.4): the overall score it failed on came 99.99% from engines 150+ cycles from failure, where every model predicts just under the cap, and 95% from a single held-out point. The rule is fixed for future experiments rather than rewritten after the fact. [Details](notebooks/19_fd004_point_estimate.ipynb).
+
 6. **Two evaluation bugs changed conclusions.** Comparing a row-level validation C-index (0.901) with an engine-level test C-index (0.864) had produced a fake "regression" after tuning. A feature misalignment on cross-validation folds had inflated a tuning result from 2 to 4 of 5 fold wins. Both were fixed, and every affected notebook was re-run. [All 7 bugs](docs/technical_report.md#11-bugs-caught-along-the-way).
 
 ---
@@ -70,7 +75,7 @@ All numbers are for the exported models, measured through the same `inference.pr
 
 **Data and labels.** NASA C-MAPSS: training engines run to failure; test engines are cut off before failure, with the true remaining life given separately. Each training row gets a `(duration, event)` label, with remaining life capped at 125 cycles, the standard C-MAPSS convention (`src/turbofan_rul/labeling.py`).
 
-**Features.** 12 informative sensors (9 near-constant ones dropped), then rolling mean/std/min/max/slope over 5/15/30-cycle windows, exponentially weighted averages and cycle count — all computed per engine and backward-looking only. For the multi-regime subsets, sensors are first normalised within each of the 6 operating regimes, which are found by KMeans (`features.py`).
+**Features.** 12 informative sensors (9 near-constant ones dropped), then rolling mean/std/min/max/slope over 5/15/30-cycle windows, exponentially weighted averages and cycle count, all computed per engine and backward-looking only. For the multi-regime subsets, sensors are first normalised within each of the 6 operating regimes, which are found by KMeans (`features.py`).
 
 **Models.**
 
@@ -123,7 +128,9 @@ The notebooks in `notebooks/` run in order, `01_eda` through `19_fd004_point_est
 
 **Docker CI.** `.github/workflows/docker.yml` builds both images with `docker compose`, starts them, and runs `scripts/docker_smoke_test.py` inside each container: the API must serve FD001 and FD004 predictions in the expected range (and reject a bad request with 422), and the dashboard must reach the API over the Compose network and make a prediction through it. It runs weekly, on demand, and on pushes that change anything inside the images (about 9 minutes, most of it the in-image model export).
 
-**Operations.** Each exported model carries a `manifest.json` with a version derived from its files (e.g. `fd001-3328802d81b0`), the git commit, data hashes, library versions and test-set metrics; the API and dashboard report which version answered, and `python -m turbofan_rul.publish` uploads and tags versions on Hugging Face (the live demo is pinned to one with `MODEL_REVISION`). The API's `GET /drift` compares the last 500 requests with a training reference (PSI, thresholds calibrated on training engines): replays show no false alarms on FD001's and FD004's own fleets and immediate alarms for FD002 and FD003 traffic ([notebook 17](notebooks/17_drift_monitoring.ipynb)). `.github/workflows/retrain.yml` retrains a challenger, compares it with the published champion on fixed rules (`gate.py`) and publishes it only if it passes; a challenger trained on 30% of the engines was rejected (NASA score 13% worse). Every prediction also carries an **input check** (`input_check` in the API, a badge on the dashboard): *familiar*, *caution* (sensors outside the training range) or *unfamiliar* (operating conditions never seen in training). Calibrated on held-out training engines; on the test sets it marks 100% of FD001's engines familiar, 90% of FD002's unfamiliar and 45% of FD003's as caution under the FD001 model. The live demo lets visitors pick engines from other fleets to see it.
+**Operations.** Each exported model carries a `manifest.json` with a version derived from its files (e.g. `fd001-3328802d81b0`), the git commit, data hashes, library versions and test-set metrics; the API and dashboard report which version answered, and `python -m turbofan_rul.publish` uploads and tags versions on Hugging Face (the live demo is pinned to one with `MODEL_REVISION`). The API's `GET /drift` compares the last 500 requests with a training reference (PSI, thresholds calibrated on training engines): replays show no false alarms on FD001's and FD004's own fleets and immediate alarms for FD002 and FD003 traffic ([notebook 17](notebooks/17_drift_monitoring.ipynb)). `.github/workflows/retrain.yml` retrains a challenger, compares it with the published champion on fixed rules (`gate.py`) and publishes it only if it passes; a challenger trained on 30% of the engines was rejected (NASA score 13% worse). 
+
+Every prediction also carries an **input check** (`input_check` in the API, a badge on the dashboard): *familiar*, *caution* (sensors outside the training range) or *unfamiliar* (operating conditions never seen in training). Calibrated on held-out training engines; on the test sets it marks 100% of FD001's engines familiar, 90% of FD002's unfamiliar and 45% of FD003's as caution under the FD001 model. The live demo lets visitors pick engines from other fleets to see it.
 
 ---
 
@@ -147,11 +154,17 @@ The notebooks in `notebooks/` run in order, `01_eda` through `19_fd004_point_est
 ## 6. Limitations
 
 - **FD004 is a transfer test.** It deliberately reuses FD001's tuned hyperparameters, to check whether the FD001 recipe holds on a harder subset without re-tuning. FD002 and FD003 are evaluation-only.
+
 - **Long-lived engines on FD004.** The interval covers 73% of FD004 test engines with more than 125 cycles left. These misses are on the safe side (the engine outlives the interval). An upper bound from an RSF trained without the 125-cycle cap reaches 100%, but makes intervals for healthy engines much wider and adds about 200 MB of models; it was measured and deliberately not deployed ([notebook 16](notebooks/16_uncapped_upper_bound.ipynb)). Without the cap, the *point estimate* gets worse (RMSE 24.4 → 28.0 out of fold on FD001), so the cap stays.
+
 - **FD004's point estimate stays RSF-only.** The FD001 blend was tested on FD004 and failed the pre-set rule because of a measurement artifact (overall cross-validated NASA is dominated by a few very young engines), not because it was worse where it is used. It stays undeployed: the rule was not changed after it failed ([notebook 19](notebooks/19_fd004_point_estimate.ipynb)).
+
 - **Censoring convention.** Training labels treat rows beyond the 125-cycle cap as failures at 125, the standard convention. Censoring those rows instead broke the Weibull model, so it was rejected.
+
 - **The survival-vs-regression evidence comes from simulated censoring** on FD001, with untuned regressors.
-- **The live demo runs in one process** (embedded mode), not as two services. This is a free-hosting constraint, and it means `/drift` exists only in the API deployment.
+
+- **The live demo runs in one process** (embedded mode), not as two services. This is a free-hosting constraint, not a default choice, and it means `/drift` exists only in the API deployment.
+
 - **Operations are demonstrated, not battle-tested.** Drift is shown on replayed fleets (there is no live traffic), its window lives in memory and resets on restart, and the retraining gate judges challengers on the official test set, which is fine for a no-worse-than check but must not be used to pick between many challengers.
 
 ---

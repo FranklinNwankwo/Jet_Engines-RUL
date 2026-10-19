@@ -5,7 +5,7 @@ sensor history, see predicted RUL, confidence interval, and risk flag.
 Two backends, chosen by environment variables (or Streamlit secrets, which
 Community Cloud also exposes as environment variables):
 
-* HTTP mode (default) -- a pure client of the FastAPI service
+* HTTP mode (default): a pure client of the FastAPI service
   (api/main.py). Every prediction is a POST to `/predict`; the sensor list
   and required columns come from `/subsets` and `/subsets/{subset}/metadata`.
   The API's address is `API_BASE_URL` (default `http://localhost:8000`), so
@@ -14,11 +14,11 @@ Community Cloud also exposes as environment variables):
   that docker-compose.yml runs; in this mode the app never imports the
   model code or loads a model artifact.
 
-* Embedded mode -- used when `API_BASE_URL` is NOT set and either
+* Embedded mode: used when `API_BASE_URL` is NOT set and either
   `MODEL_REPO` (a Hugging Face model repo holding the exported `fd001/` and
   `fd004/` folders) or `MODELS_DIR` (a local folder with the same layout)
   is. The app then loads the deployment bundles itself and calls
-  `turbofan_rul.inference.predict` -- the exact function the API calls --
+  `turbofan_rul.inference.predict`, the exact function the API calls,
   in-process. This exists for the public demo on Streamlit Community Cloud,
   which can only host a Streamlit app, not a separate API service.
 
@@ -27,7 +27,7 @@ functions is shared.
 
 Look and feel: colours and fonts come from `.streamlit/config.toml` (the
 theme); the small amount of CSS below only styles the custom HTML cards.
-Charts use Altair, which ships with Streamlit -- no extra dependency.
+Charts use Altair, which ships with Streamlit, no extra dependency.
 
 Run with:
   API_BASE_URL=http://localhost:8000 streamlit run app/streamlit_app.py   # HTTP mode
@@ -52,12 +52,13 @@ import streamlit as st
 # which reads the public C-MAPSS dataset directly. The model-facing modules
 # (turbofan_rul.inference) are imported lazily, in embedded mode only, so the
 # HTTP-mode Docker image never needs scikit-learn, scikit-survival or lifelines.
+
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 from turbofan_rul import data_loading  # noqa: E402
 
-MODEL_REPO = os.environ.get("MODEL_REPO")            # e.g. "your-hf-username/turbofan-rul-models"
-MODEL_REVISION = os.environ.get("MODEL_REVISION")    # optional: pin a commit/tag of that repo
-MODELS_DIR = os.environ.get("MODELS_DIR")            # local alternative to MODEL_REPO
+MODEL_REPO = os.environ.get("MODEL_REPO")            
+MODEL_REVISION = os.environ.get("MODEL_REVISION")    
+MODELS_DIR = os.environ.get("MODELS_DIR")            
 EMBEDDED = "API_BASE_URL" not in os.environ and bool(MODEL_REPO or MODELS_DIR)
 API_BASE_URL = os.environ.get("API_BASE_URL", "http://localhost:8000")
 DATA_DIR = Path(__file__).parent.parent / "data" / "raw"
@@ -74,11 +75,11 @@ CRITICAL_BELOW, WARNING_BELOW = 20, 50
 
 RISK_STYLE = {
     "critical": {"label": "Critical", "color": "#EF4444",
-                 "note": "Could fail within 20 cycles (90% lower bound) — schedule maintenance now."},
+                 "note": "Could fail within 20 cycles (90% lower bound); schedule maintenance now."},
     "warning": {"label": "Warning", "color": "#F5A524",
                 "note": "Best estimate under 50 cycles — plan maintenance soon."},
     "healthy": {"label": "Healthy", "color": "#22C55E",
-                "note": "Best estimate 50+ cycles, lower bound above 20 — no action needed yet."},
+                "note": "Best estimate 50+ cycles, lower bound above 20; no action needed yet."},
 }
 
 SUBSET_INFO = {
@@ -87,6 +88,7 @@ SUBSET_INFO = {
 }
 # Fleets a visitor can draw sample engines from. Engines from a fleet the
 # selected model wasn't trained on show what the input check does.
+
 FLEETS = {
     "FD001": "1 operating regime · 1 fault mode",
     "FD002": "6 operating regimes · 1 fault mode",
@@ -106,8 +108,8 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-# Only styles the custom HTML blocks below; everything else is themed by
-# .streamlit/config.toml.
+# Only styles the custom HTML blocks below; everything else is themed by .streamlit/config.toml.
+
 st.markdown(
     """
     <style>

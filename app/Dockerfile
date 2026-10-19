@@ -1,6 +1,6 @@
 # Dashboard image: a pure HTTP client of the API service (see
 # app/streamlit_app.py's module docstring). No model artifacts, no
-# scikit-learn/scikit-survival/lifelines -- requirements-app.txt is short
+# scikit-learn/scikit-survival/lifelines, requirements-app.txt is short
 # specifically because this image doesn't need any of that anymore.
 #
 # Why src/ is still copied: the "Sample engine" tab imports
@@ -11,7 +11,7 @@
 # at /app/data/raw). The "Upload your own readings" tab needs neither.
 #
 # API_BASE_URL is a runtime environment variable, not baked in at build
-# time -- the same image works pointed at localhost (docker run by hand),
+# time, the same image works pointed at localhost (docker run by hand),
 # a Compose service name (docker-compose.yml sets this to
 # http://api:8000), or a public API URL after cloud deployment.
 

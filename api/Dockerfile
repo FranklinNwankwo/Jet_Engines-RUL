@@ -3,14 +3,15 @@
 #
 # Why bake the models into the image rather than mount them at runtime:
 # each subset's build (RSF + Weibull fit, plus the 5-fold cross-conformal
-# calibration from Phase 14) takes minutes -- fine for a one-time image
+# calibration from Phase 14) takes minutes, which is fine for a one-time image
 # build, but a container that had to do that on every cold start would
 # fail most platforms' startup/health-check timeouts.
+
 # The tradeoff is a slow `docker build` in exchange for an instant
 # `docker run` -- the right way around for a service, not a notebook.
 #
 # models/ is gitignored (the RSF artifact alone is 200+MB) and is NOT
-# copied in from the host -- it's produced fresh inside the image, so this
+# copied in from the host, it's produced fresh inside the image, so this
 # Dockerfile builds correctly from a clean clone with no local model files
 # required, the same "reproducible from a clean checkout" guarantee
 # export_deployment_artifacts.py already provides outside Docker.
@@ -36,7 +37,7 @@ COPY data/processed/fd001_sensor_selection.json ./data/processed/fd001_sensor_se
 ENV PYTHONPATH=/app/src
 ENV PYTHONUNBUFFERED=1
 
-# Build the deployment artifacts now, inside the image -- each line
+# Build the deployment artifacts now, inside the image, each line
 # downloads its C-MAPSS subset (cached to data/raw/ within the image
 # layer), fits RSF + Weibull AFT on all training engines, and runs the
 # 5-fold cross-conformal interval calibration from Phase 14. Real network
